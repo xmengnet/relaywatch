@@ -1,0 +1,92 @@
+# 部署
+
+## 构建产物形态
+
+`make build` 产出单个可执行文件 `relaywatch`（前端已 `go:embed` 打包），运行时零依赖。构建环境需要 Go 1.27+、Node 22+、pnpm；运行环境无任何要求。
+
+```bash
+make build
+./relaywatch -config config.yaml
+```
+
+## 初始化
+
+1. 生成加密密钥并写入配置（**必做**，未设置拒绝启动）：
+
+   ```bash
+   openssl rand -base64 32
+   ```
+
+2. 复制 `config.example.yaml` 为 `config.yaml`，填入 `security.secret_key`、`server.addr`、`database.path`。
+
+3. 启动后浏览器打开 `http://<addr>`，首次访问引导创建管理员账户（仅用户表为空时可用）。
+
+4. **备份 `secret_key`**。密钥丢失则数据库中所有 token / webhook 配置无法解密恢复。密钥轮换：新密钥写入 `security.secret_key`，旧密钥放 `security.old_secret_key`，服务会自动用旧密钥解密存量数据（读时回退）。
+
+## Docker
+
+```bash
+docker build -t relaywatch .
+
+docker run -d --name relaywatch \
+  -p 8080:8080 \
+  -v relaywatch-data:/data \
+  -e RELAYWATCH_SECRET_KEY="$(openssl rand -base64 32)" \
+  relaywatch
+```
+
+数据（SQLite + WAL）在 `/data` 卷内；把 `config.yaml` 放进挂载目录或改用环境变量。`RELAYWATCH_SECRET_KEY` 优先于配置文件。
+
+注意：容器重建后若 `RELAYWATCH_SECRET_KEY` 是每次随机生成的，已加密配置将无法解密——生产环境固定一个密钥并妥善保管。
+
+## systemd
+
+```bash
+sudo useradd -r -s /usr/sbin/nologin -d /var/lib/relaywatch relaywatch
+sudo mkdir -p /var/lib/relaywatch /etc/relaywatch
+sudo cp relaywatch /usr/local/bin/
+sudo cp config.example.yaml /etc/relaywatch/config.yaml
+sudo cp deploy/relaywatch.env.example /etc/relaywatch/env
+sudo chown -R relaywatch:relaywatch /var/lib/relaywatch
+sudo chmod 600 /etc/relaywatch/env   # 编辑 env 填入 RELAYWATCH_SECRET_KEY
+
+sudo cp deploy/relaywatch.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now relaywatch
+```
+
+unit 文件已含 `ProtectSystem=strict`、`NoNewPrivileges` 等加固，写路径仅 `/var/lib/relaywatch`。
+
+## 反向代理
+
+服务自带 SPA fallback 与安全响应头。前面挂 Nginx 时：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+
+# SSE 需要关闭缓冲（M6 实时更新启用时）
+location /api/v1/events {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_set_header Connection '';
+    proxy_http_version 1.1;
+    chunked_transfer_encoding off;
+}
+```
+
+`server.base_url` 需设为外部可达地址（`https://relaywatch.example.com`），OIDC 回调依赖它。
+
+## Prometheus
+
+`/metrics` 输出文本格式指标（监控按状态计数、启用数、投递队列），无需认证——建议在反代层限制来源，或仅监听内网。
+
+## 备份
+
+- 数据库：`sqlite3 data/relaywatch.db ".backup backup.db"`（在线安全备份），或直接复制 `.db` 文件（WAL 模式下建议先停写）
+- 加密密钥：与数据库分开保管

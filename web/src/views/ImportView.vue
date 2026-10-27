@@ -84,7 +84,7 @@ function onFile(e: Event) {
             class="font-mono"
             placeholder='[mygo]
 source = "github"
-github = "egoist/mygo-cloudmusic"
+github = "xmengnet/relaywatch"
 use_latest_release = true'
           />
           <v-btn color="primary" :loading="parsing" :disabled="!text.trim()" prepend-icon="mdi-text-box-search" @click="parse">解析预览</v-btn>

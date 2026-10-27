@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"relaywatch/internal/notifier"
@@ -19,6 +20,9 @@ type Worker struct {
 	Interval  time.Duration // 轮询间隔，默认 2s
 	// ResendLatest 前端手动重发时调用；true 表示重发时版本号取发送时刻 latest_version
 	OnDelivery func(status store.DeliveryStatus)
+
+	cancelFn context.CancelFunc // Start 时记录，Stop 时触发（与作废投递的 cancel 方法无关）
+	wg     sync.WaitGroup     // 跟踪 loop；Stop 等待其在跑轮次结束
 }
 
 // ForceFlag 在投递记录上标记手动重发（运行时字段，不落库）。
@@ -36,10 +40,21 @@ func (w *Worker) ProcessForced(ctx context.Context, d *store.Delivery) {
 
 // Start 启动 worker 循环。
 func (w *Worker) Start(ctx context.Context) {
+	ctx, w.cancelFn = context.WithCancel(ctx)
+	w.wg.Add(1)
 	go w.loop(ctx)
 }
 
+// Stop 停止轮询并等待当前轮次结束。
+func (w *Worker) Stop() {
+	if w.cancelFn != nil {
+		w.cancelFn()
+	}
+	w.wg.Wait()
+}
+
 func (w *Worker) loop(ctx context.Context) {
+	defer w.wg.Done()
 	t := time.NewTicker(w.interval())
 	defer t.Stop()
 	for {

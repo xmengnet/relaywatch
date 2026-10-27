@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"encoding/json"
+
 	"relaywatch/internal/store"
 )
 
@@ -28,8 +30,8 @@ func toUserResponse(u *store.User) *userResponse {
 type monitorResponse struct {
 	ID                  int64    `json:"id"`
 	Name                string   `json:"name"`
-	SourceType          string   `json:"source_type"`
-	SourceConfig        string   `json:"source_config"`
+	SourceType          string          `json:"source_type"`
+	SourceConfig        json.RawMessage `json:"source_config"`
 	VersionPrefix       string   `json:"version_prefix,omitempty"`
 	VersionSuffix       string   `json:"version_suffix,omitempty"`
 	VersionIncludeRegex string   `json:"version_include_regex,omitempty"`
@@ -60,7 +62,6 @@ func toMonitorResponse(m *store.Monitor) *monitorResponse {
 		ID:                  m.ID,
 		Name:                m.Name,
 		SourceType:          m.SourceType,
-		SourceConfig:        m.SourceConfig,
 		VersionPrefix:       m.VersionPrefix,
 		VersionSuffix:       m.VersionSuffix,
 		VersionIncludeRegex: m.VersionIncludeRegex,
@@ -84,6 +85,13 @@ func toMonitorResponse(m *store.Monitor) *monitorResponse {
 	}
 	if r.ChannelIDs == nil {
 		r.ChannelIDs = []int64{}
+	}
+	// source_config 存库为 JSON 字符串，API 直出为 JSON 对象；
+	// 空或非法时输出空对象，前端表单按对象消费
+	if raw := []byte(m.SourceConfig); len(raw) > 0 && json.Valid(raw) {
+		r.SourceConfig = json.RawMessage(raw)
+	} else {
+		r.SourceConfig = json.RawMessage("{}")
 	}
 	if m.LastCheckedAt != nil {
 		s := m.LastCheckedAt.Format(timeRFC3339)

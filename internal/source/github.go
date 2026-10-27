@@ -18,7 +18,7 @@ func (s *GitHubReleaseSource) Meta() Meta {
 		Label: "GitHub Release",
 		Icon:  "mdi-github",
 		Fields: []FieldSpec{
-			{Key: "repo", Label: "仓库", Type: "string", Required: true, Placeholder: "owner/name", Help: "如 egoist/mygo-cloudmusic"},
+			{Key: "repo", Label: "仓库", Type: "string", Required: true, Placeholder: "owner/name", Help: "如 xmengnet/relaywatch"},
 			{Key: "include_prerelease", Label: "包含预发布", Type: "bool"},
 			{Key: "token", Label: "访问令牌", Type: "secret", Help: "公开仓库可留空，私有仓库或避免限流时填写"},
 		},
@@ -98,7 +98,7 @@ func (s *GitHubTagSource) Validate(cfg map[string]any) error {
 }
 
 type ghTag struct {
-	Name string `json:"name"`
+	Name   string `json:"name"`
 	Commit struct {
 		SHA string `json:"sha"`
 		URL string `json:"url"`

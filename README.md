@@ -6,6 +6,7 @@
 
 - [需求文档](docs/requirements.md) — 功能范围、验收标准、里程碑
 - [设计方案](docs/design.md) — 技术选型、数据模型、接口、调度、认证、安全
+- [部署文档](docs/deploy.md) — Docker、systemd、反向代理、备份
 
 ## 定位
 
@@ -31,20 +32,22 @@ RelayWatch 把前者的精确版本检测和后者的 Web 操作体验结合起�
 
 ## 状态
 
-M1–M4 已完成（验收冒烟通过）。
+M1–M5 已完成（验收冒烟通过），核心功能全部就绪。
 
-已完成：
-- Go 后端：chi 路由、SQLite（modernc.org/sqlite 纯 Go）、迁移（embed + schema_migrations）
-- 认证：本地账户（bcrypt cost 12）、首次引导、会话 Cookie + CSRF、API Token（Bearer）、**OIDC 登录**（授权码 + PKCE、自动发现、claim 规则限制 email 域名/groups、首次登录自动建 viewer 用户）、**敏感字段 AES-256-GCM 加密**（`secret_key` 强制，旧密钥过渡 + 明文兼容读取）
-- 监控 CRUD + 批量操作 + 真实 `/api/v1/stats`
-- 检查引擎：github_release / github_tag / aur / arch_official 源、semver + 分段回退版本比较、include/ignore 过滤、状态机（unknown/up_to_date/has_update/error/missing，含版本回退语义）
+**监控源**（13）：github_release / github_tag / gitlab_release / gitea_release / aur / arch_official / pypi / npm / crates / go_module / http_json / http_regex / docker_tag
+
+**通知渠道**（13）：webhook / telegram / discord / slack / ntfy / gotify / email_smtp / feishu / wecom / dingtalk / pushdeer / serverchan / bark
+
+已完成的能力：
+- 认证：本地账户（bcrypt cost 12）、首次引导、会话 Cookie + CSRF、API Token（Bearer）、OIDC 登录（授权码 + PKCE、claim 规则、首次登录自动建档）、敏感字段 AES-256-GCM 加密（`secret_key` 强制、旧密钥过渡）
+- 检查引擎：semver + 分段回退版本比较、include/ignore 过滤、五态状态机（unknown/up_to_date/has_update/error/missing，含版本回退语义）
 - 调度器：ticker + 确定性抖动 + per-host 令牌桶限速 + 手动检查同步返回
-- 通知系统：webhook / telegram 渠道、text/template 模板、投递队列（重试/退避/静默期/作废/手动重发）、渠道测试发送
-- **导入 / 导出（M4）**：nvchecker keyfile（TOML）解析 → 预览（无效条目与告警列出）→ 选择性导入；全部监控与渠道导出 JSON（默认脱敏 token）
-- Vue 3 + Vuetify 4.3 前端：动态源/渠道表单、监控列表与详情、渠道管理、通知历史、导入页、导出按钮、OIDC 登录按钮、设置页（告警渠道 + Provider 管理）
-- `make build` 单二进制（前端 `go:embed`）
+- 通知系统：text/template 模板、投递队列（指数退避重试、静默期 deferred、补发前校验、ack/停用/重发作废）、渠道测试发送
+- 导入 / 导出：nvchecker keyfile（TOML）预览导入；JSON 导出（默认脱敏）
+- Web 界面：Vue 3 + Vuetify 4.3，动态源/渠道表单、监控列表与详情、通知历史、导入页、设置页、仪表盘
+- 运维：`/metrics` Prometheus 文本指标、Dockerfile、systemd unit（[部署文档](docs/deploy.md)）
 
-未完成（M5）：Prometheus 指标、Docker 镜像、systemd 文档、i18n 补全；更多源/渠道类型（gitlab/gitea/pypi/npm/crates/go/HTTP/容器，接口与表单已就绪，按需注册实现即可）。
+后续可选：SSE 实时推送、「上游 vs 本地」双轨对比（v2）。
 
 ## 构建与开发
 

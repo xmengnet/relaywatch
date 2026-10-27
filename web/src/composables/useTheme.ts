@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useTheme as useVuetifyTheme } from 'vuetify'
 
 export type ThemeMode = 'light' | 'dark' | 'auto'
@@ -17,6 +17,9 @@ export function useTheme() {
     }
     localStorage.setItem('rw-theme', mode.value)
   }
+
+  apply()
+  watch(mode, apply)
 
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     if (mode.value === 'auto') apply()

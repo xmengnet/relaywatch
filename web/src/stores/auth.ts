@@ -14,7 +14,10 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = status.user
     setupRequired.value = status.setup_required
     loaded.value = true
-    if (!status.user) {
+    if (status.user && status.csrf_token) {
+      // 已登录（含页面刷新后）：直接取回该会话的 CSRF token
+      setCsrf(status.csrf_token)
+    } else if (!status.user) {
       // 页面刷新后会话可能还在，尝试拿一次 CSRF
       try {
         const { authCsrf } = await import('@/api/csrf')

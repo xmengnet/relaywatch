@@ -1,5 +1,5 @@
 server:
-  addr: ":8080"
+  addr: ":3721"
   base_url: "http://localhost:8080"
 
 database:
@@ -13,6 +13,25 @@ security:
   session_ttl: "168h"
   login_rate_limit: 5
   login_lockout: "15m"
+
+scheduler:
+  tick: "10s"
+  max_conc: 10
+  min_interval: 60          # 单条监控最小检查间隔（秒）
+  host_rate_limit:
+    default_per_minute: 30  # 每主机每分钟请求上限
+    overrides:
+      api.github.com: 25    # 留余量给 429/Retry-After
+
+sources:
+  http_timeout: "20s"
+  user_agent: "RelayWatch/0.1"
+
+notifications:
+  retry:
+    max_attempts: 5
+    base_delay: "2s"
+    max_delay: "10m"
 
 logging:
   level: "info"

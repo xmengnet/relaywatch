@@ -23,9 +23,13 @@ export default defineConfig({
     },
   },
   server: {
+    // Vite 8 默认只绑 IPv6 loopback，显式绑全回环避免 127.0.0.1 打不开
+    host: '127.0.0.1',
+    port: 5173,
     proxy: {
-      '/api': 'http://localhost:8080',
-      '/auth': 'http://localhost:8080',
+      // 后端地址跟 config.yaml 的 server.addr；默认 :8080
+      '/api': process.env.RW_BACKEND ?? 'http://localhost:8080',
+      '/auth': process.env.RW_BACKEND ?? 'http://localhost:8080',
     },
   },
 })

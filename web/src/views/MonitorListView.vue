@@ -134,10 +134,10 @@ const hasSelected = computed(() => selected.value.length > 0)
       />
       <v-spacer />
       <template v-if="hasSelected">
-        <span class="text-medium-emphasis align-self-center">已选 {{ selected.length }} 项</span>
-        <v-btn size="small" @click="doBatch('enable')">启用</v-btn>
-        <v-btn size="small" @click="doBatch('disable')">停用</v-btn>
-        <v-btn size="small" color="error" @click="doBatch('delete')">删除</v-btn>
+        <span class="text-medium-emphasis align-self-center me-2">已选 {{ selected.length }} 项</span>
+        <v-btn height="48" @click="doBatch('enable')">启用</v-btn>
+        <v-btn height="48" @click="doBatch('disable')">停用</v-btn>
+        <v-btn height="48" color="error" @click="doBatch('delete')">删除</v-btn>
       </template>
     </div>
 

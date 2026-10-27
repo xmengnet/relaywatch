@@ -131,6 +131,13 @@ function typeLabel(t: string) {
 function typeIcon(t: string) {
   return types.value.find(x => x.type === t)?.icon ?? 'mdi-bell-outline'
 }
+
+// 自定义正文模板说明（Go text/template，可用字段见 notifier.TemplateData）
+const templateHint = [
+  'Go text/template，只作用于正文，留空用默认模板。示例：',
+  '📦 {{ .Monitor.Name }} {{ if .Change.OldVersion }}{{ .Change.OldVersion }} → {{ end }}{{ .Change.NewVersion }}',
+  '可用字段：.Monitor.Name / .Monitor.SourceType / .Monitor.Tags、.Change.OldVersion / .Change.NewVersion / .Change.DetectedAt、.URL；函数 upper 可用',
+].join('\n')
 </script>
 
 <template>
@@ -199,6 +206,16 @@ function typeIcon(t: string) {
               color="primary"
               :hint="f.help"
               persistent-hint
+              class="mb-4"
+            />
+            <v-select
+              v-else-if="f.type === 'select'"
+              v-model="state.config[f.key] as string"
+              :items="f.options ?? []"
+              :label="f.label + (f.required ? ' *' : '')"
+              :hint="f.help"
+              persistent-hint
+              class="mb-4"
             />
             <v-text-field
               v-else
@@ -208,14 +225,16 @@ function typeIcon(t: string) {
               :placeholder="f.placeholder"
               :type="f.type === 'secret' ? 'password' : 'text'"
               persistent-hint
+              class="mb-4"
             />
           </template>
           <v-textarea
             v-model="state.template"
             label="自定义模板（可选）"
             rows="3"
-            hint="Go text/template；留空用默认模板"
+            :hint="templateHint"
             persistent-hint
+            class="mb-4"
           />
           <v-switch v-if="editing" v-model="state.enabled" label="启用" color="primary" />
           <v-alert v-if="errorMsg" type="error" density="compact" class="mb-2">{{ errorMsg }}</v-alert>

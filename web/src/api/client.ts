@@ -10,7 +10,11 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function apiFetch<T>(
+  path: string,
+  init: RequestInit = {},
+  opts: { skipAuthRedirect?: boolean } = {},
+): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
@@ -26,8 +30,12 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   })
 
   if (res.status === 401) {
-    location.href = '/login'
-    throw new ApiError('未登录', 401)
+    // 已在登录页时不再整页跳转，否则探测性请求的 401 会造成无限刷新
+    if (!opts.skipAuthRedirect && location.pathname !== '/login') {
+      location.href = '/login'
+    }
+    const body = await res.json().catch(() => ({}))
+    throw new ApiError(body.message ?? '未登录', 401, body.fields)
   }
 
   if (!res.ok) {

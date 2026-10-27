@@ -1,2 +1,4 @@
 minimumReleaseAgeExclude:
   - vuetify@4.3.1
+allowBuilds:
+  esbuild: true

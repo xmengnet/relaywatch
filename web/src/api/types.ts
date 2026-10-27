@@ -11,7 +11,8 @@ export interface Monitor {
   id: number
   name: string
   source_type: string
-  source_config: Record<string, unknown>
+  // 旧版后端返回 JSON 字符串，现直出对象；消费方需兼容两者
+  source_config: Record<string, unknown> | string
   version_prefix?: string
   version_suffix?: string
   version_include_regex?: string

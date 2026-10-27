@@ -43,6 +43,7 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	r.Handle("/metrics", &MetricsHandler{St: s.Store})
 
 	// OIDC 302 跳转（不经过 /api/v1，SPA 无法消费 302）
 	if s.OIDC != nil {

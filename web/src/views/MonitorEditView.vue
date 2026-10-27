@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import SourceConfigForm from '@/components/SourceConfigForm.vue'
 import { createMonitor, getMonitor, updateMonitor, type MonitorPayload } from '@/api/monitors'
 import { listChannels, type Channel } from '@/api/channels'
@@ -12,7 +12,6 @@ const isEdit = computed(() => !!route.params.id)
 const form = ref()
 const saving = ref(false)
 const errorMsg = ref('')
-const initial = ref<string>('')
 
 const state = reactive({
   name: '',
@@ -51,10 +50,17 @@ onMounted(async () => {
   listChannels().then(r => { allChannels.value = r.items })
   if (isEdit.value) {
     const m = await getMonitor(route.params.id as string)
+    // 后端可能返回 JSON 字符串（旧版本）或对象，统一归一化为对象
+    let cfg: Record<string, unknown> = {}
+    if (typeof m.source_config === 'string') {
+      try { cfg = JSON.parse(m.source_config || '{}') } catch { cfg = {} }
+    } else if (m.source_config) {
+      cfg = m.source_config
+    }
     Object.assign(state, {
       name: m.name,
       source_type: m.source_type,
-      source_config: m.source_config ?? {},
+      source_config: cfg,
       version_prefix: m.version_prefix ?? '',
       version_suffix: m.version_suffix ?? '',
       version_include_regex: m.version_include_regex ?? '',
@@ -68,20 +74,6 @@ onMounted(async () => {
     tagsText.value = (m.tags ?? []).join(', ')
     selectedChannels.value = m.channel_ids ?? []
   }
-  initial.value = JSON.stringify(snapshot())
-})
-
-function snapshot() {
-  return { ...state, tags: parseTags(), channels: [...selectedChannels.value] }
-}
-
-const dirty = computed(() => JSON.stringify(snapshot()) !== initial.value)
-
-onBeforeRouteLeave(async (_to, _from, next) => {
-  if (!dirty.value || saving.value) return next()
-  // 简单确认：浏览器原生对话框足够（自用工具定位）
-  const ok = window.confirm('有未保存的修改，确定离开吗？')
-  next(ok)
 })
 
 async function submit() {

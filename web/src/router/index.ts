@@ -38,11 +38,19 @@ router.beforeEach(async (to) => {
   const auth = useAuthStore()
   if (!auth.loaded) await auth.load()
   if (to.meta.public) {
-    // 已登录用户不回登录页；但 setup 页面始终可达（后端会再次校验）
+    // 已登录用户不回登录/引导页
     if ((to.name === 'login' || to.name === 'setup') && auth.user) return { path: '/' }
+    // 首次启动必须先创建管理员账户
+    if (to.name !== 'setup' && auth.setupRequired) return { path: '/setup' }
+    // 系统已初始化后 setup 关闭
+    if (to.name === 'setup' && !auth.setupRequired) return { path: '/login' }
     return true
   }
-  if (!auth.user) return { path: '/login', query: { redirect: to.fullPath } }
+  if (!auth.user) {
+    // 首次启动时任何页面都引导去 /setup
+    if (auth.setupRequired) return { path: '/setup' }
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
   if (to.meta.admin && auth.user.role !== 'admin') return { path: '/' }
   return true
 })

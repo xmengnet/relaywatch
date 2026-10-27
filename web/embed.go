@@ -1,3 +1,5 @@
+//go:build !dev
+
 // Package web 通过 go:embed 嵌入前端构建产物。
 package web
 
@@ -10,7 +12,8 @@ import (
 var distFS embed.FS
 
 // Dist 返回去掉 dist/ 前缀的文件系统，供 HTTP 静态服务使用。
-// 构建前端前该包无法编译（embed 要求 dist 存在），Makefile 保证顺序。
+// 构建前端前该包无法编译（embed 要求 dist 存在），Makefile 保证顺序；
+// `go build -tags dev` 时本文件被排除（见 embed_dev.go），不要求 dist 存在。
 func Dist() fs.FS {
 	sub, err := fs.Sub(distFS, "dist")
 	if err != nil {

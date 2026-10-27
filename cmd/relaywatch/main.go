@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -77,12 +76,8 @@ func main() {
 	authSvc := auth.NewService(st, cfg.Security.SessionTTL)
 	oidcSvc := auth.NewOIDCService(st, cfg.Security.SessionTTL, cfg.Server.BaseURL)
 
-	// 源注册表
-	registry := source.NewRegistry()
-	registry.Register(&source.GitHubReleaseSource{})
-	registry.Register(&source.GitHubTagSource{})
-	registry.Register(&source.AURSource{})
-	registry.Register(&source.ArchOfficialSource{})
+	// 源注册表（新增源类型在 internal/source/defaults.go 维护）
+	registry := source.NewDefaultRegistry()
 
 	checker := &check.Checker{
 		Registry:  registry,
@@ -99,10 +94,8 @@ func main() {
 		Hosts:   scheduler.NewHostLimiter(cfg.Scheduler.HostRateLimit.DefaultPerMinute, cfg.Scheduler.HostRateLimit.Overrides),
 	}
 
-	// 通知编排
-	notifiers := notifier.NewRegistry()
-	notifiers.Register(&notifier.WebhookNotifier{})
-	notifiers.Register(&notifier.TelegramNotifier{})
+	// 通知渠道注册表（新增渠道在 internal/notifier/defaults.go 维护）
+	notifiers := notifier.NewDefaultRegistry()
 	dispatcher := &notify.Dispatcher{
 		Store:       st,
 		Notifiers:   notifiers,
@@ -116,22 +109,8 @@ func main() {
 		Notifiers: notifiers,
 	}
 
-	// 渠道测试发送：直接用默认模板发一条
-	testSender := func(ctx context.Context, ch *store.Channel) error {
-		n, ok := notifiers.Get(ch.Type)
-		if !ok {
-			return fmt.Errorf("未知渠道类型 %s", ch.Type)
-		}
-		var cfgMap map[string]any
-		_ = json.Unmarshal([]byte(ch.Config), &cfgMap)
-		msg := &notifier.Message{
-			Title:   "RelayWatch 测试消息",
-			Body:    "这是一条来自 RelayWatch 的测试通知，说明该渠道配置正确。",
-			Markdown: true,
-		}
-		return n.Send(ctx, cfgMap, msg)
-	}
-	// 手动重发：worker 同步处理一条 pending 记录
+	// 渠道测试发送 / 手动重发
+	testSender := notify.NewTestSender(notifiers)
 	resendOne := func(ctx context.Context, d *store.Delivery) error {
 		worker.ProcessForced(ctx, d)
 		return nil
@@ -141,12 +120,15 @@ func main() {
 		Auth:      authSvc,
 		OIDC:      oidcSvc,
 		Store:     st,
-		WebDist:   web.Dist(),
+		WebDist:   web.Dist(), // dev 构建标签下为 nil（前端走 Vite :5173）
 		Checker:   checker,
 		Registry:  registry,
 		Notifiers: notifiers,
 		TestSender: testSender,
 		ResendOne:  resendOne,
+	}
+	if srv.WebDist == nil {
+		slog.Info("dev 构建：静态资源未嵌入，前端请访问 Vite dev server (:5173)")
 	}
 
 	httpServer := &http.Server{
@@ -176,10 +158,12 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	slog.Info("正在关闭…")
-	sched.Stop()
+	// 先关 HTTP（排空在途请求），再停调度器和投递 worker（等在跑轮次落库）。
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(shutdownCtx)
+	sched.Stop()
+	worker.Stop()
 }
 
 func fatal(err error) {
