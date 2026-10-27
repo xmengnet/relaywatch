@@ -30,6 +30,11 @@ const statusMeta: Record<string, { color: string; text: string }> = {
   canceled: { color: 'default', text: '已取消' },
 }
 
+const kindMeta: Record<string, { color: string; text: string }> = {
+  update: { color: 'primary', text: '版本更新' },
+  compare: { color: 'deep-purple', text: '版本对比' },
+}
+
 async function load() {
   loading.value = true
   try {
@@ -90,6 +95,7 @@ function canResend(d: Delivery) {
       :headers="[
         { title: '时间', key: 'created_at', sortable: false },
         { title: '监控', key: 'monitor_id', sortable: false },
+        { title: '事件', key: 'kind', sortable: false },
         { title: '渠道', key: 'channel_id', sortable: false },
         { title: '状态', key: 'status', sortable: false },
         { title: '错误', key: 'last_error', sortable: false },
@@ -105,10 +111,17 @@ function canResend(d: Delivery) {
         <RelativeTime :time="item.created_at" />
       </template>
       <template #item.monitor_id="{ item }">
-        <router-link :to="`/monitors/${item.monitor_id}`" class="text-decoration-none">#{{ item.monitor_id }}</router-link>
+        <router-link :to="`/monitors/${item.monitor_id}`" class="text-decoration-none text-high-emphasis">
+          {{ item.monitor_name || `#${item.monitor_id}` }}
+        </router-link>
+      </template>
+      <template #item.kind="{ item }">
+        <v-chip :color="kindMeta[item.kind]?.color ?? 'default'" size="small" variant="tonal" label>
+          {{ kindMeta[item.kind]?.text ?? item.kind }}
+        </v-chip>
       </template>
       <template #item.channel_id="{ item }">
-        #{{ item.channel_id }}
+        {{ item.channel_name || `#${item.channel_id}` }}
       </template>
       <template #item.status="{ item }">
         <v-chip :color="statusMeta[item.status]?.color ?? 'default'" size="small" variant="tonal">

@@ -1,14 +1,28 @@
 export type MonitorState = 'unknown' | 'up_to_date' | 'has_update' | 'error' | 'missing'
 
+export type Role = 'admin' | 'user' | 'viewer'
+
 export interface User {
   id: number
   username: string
   email?: string
-  role: 'admin' | 'viewer'
+  display_name?: string
+  role: Role
+}
+
+export interface AdminUser extends User {
+  permissions?: string[] | null
+  oidc_provider?: string
+  disabled: boolean
+  created_at: string
+  last_login_at?: string
+  monitor_count: number
 }
 
 export interface Monitor {
   id: number
+  owner_id?: number
+  owner_name?: string
   name: string
   source_type: string
   // 旧版后端返回 JSON 字符串，现直出对象；消费方需兼容两者
@@ -33,6 +47,7 @@ export interface Monitor {
   note?: string
   channel_ids?: number[]
   reference_monitor_id?: number | null
+  reference_monitor_name?: string
   compare_state?: string
   compare_ref_version?: string
   compare_since?: string

@@ -31,6 +31,24 @@ func (h *CheckHandler) sourceTypes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": h.Registry.Metas()})
 }
 
+// canAccessMonitorID 按 id 校验监控归属，失败已写 404 响应。
+func (h *CheckHandler) canAccessMonitorID(w http.ResponseWriter, r *http.Request, id int64) bool {
+	m, err := h.St.GetMonitor(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "监控不存在")
+		return false
+	}
+	if err != nil {
+		writeInternalError(w, err)
+		return false
+	}
+	if !canAccessMonitor(authUser(r), m) {
+		writeError(w, http.StatusNotFound, "监控不存在") // 404 语义，防枚举
+		return false
+	}
+	return true
+}
+
 // checkNow 同步执行检查并返回结果（需求 8.5.3）。
 func (h *CheckHandler) checkNow(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
@@ -44,6 +62,10 @@ func (h *CheckHandler) checkNow(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeInternalError(w, err)
+		return
+	}
+	if !canAccessMonitor(authUser(r), m) {
+		writeError(w, http.StatusNotFound, "监控不存在") // 404 语义，防枚举
 		return
 	}
 	if !m.Enabled {
@@ -75,6 +97,10 @@ func (h *CheckHandler) ack(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeInternalError(w, err)
+		return
+	}
+	if !canAccessMonitor(u, m) {
+		writeError(w, http.StatusNotFound, "监控不存在")
 		return
 	}
 	open, err := h.St.OpenVersionChange(r.Context(), id)
@@ -116,6 +142,9 @@ func (h *CheckHandler) history(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.canAccessMonitorID(w, r, id) {
+		return
+	}
 	page, perPage := pageParams(r)
 	items, total, err := h.St.ListCheckHistory(r.Context(), id, page, perPage)
 	if err != nil {
@@ -132,6 +161,9 @@ func (h *CheckHandler) history(w http.ResponseWriter, r *http.Request) {
 func (h *CheckHandler) changes(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {
+		return
+	}
+	if !h.canAccessMonitorID(w, r, id) {
 		return
 	}
 	page, perPage := pageParams(r)

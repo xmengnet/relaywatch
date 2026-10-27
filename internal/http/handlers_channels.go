@@ -40,6 +40,7 @@ type channelPayload struct {
 	Config   json.RawMessage `json:"config"`
 	Template string          `json:"template"`
 	Enabled  *bool           `json:"enabled"`
+	Shared   *bool           `json:"shared"` // 仅 admin：设为全局共享渠道
 }
 
 func (p *channelPayload) validate() error {
@@ -66,6 +67,11 @@ func (h *ChannelHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	u := authUser(r)
+	if !u.Can(store.PermCreateChannel) {
+		forbidPermission(w, "创建渠道")
+		return
+	}
 	enabled := true
 	if p.Enabled != nil {
 		enabled = *p.Enabled
@@ -76,6 +82,15 @@ func (h *ChannelHandler) create(w http.ResponseWriter, r *http.Request) {
 		Config:   string(p.Config),
 		Template: p.Template,
 		Enabled:  enabled,
+	}
+	if isAdmin(u) {
+		if p.Shared != nil && *p.Shared {
+			c.OwnerID = nil // 全局共享
+		} else {
+			c.OwnerID = &u.ID
+		}
+	} else {
+		c.OwnerID = &u.ID // 普通用户不可建共享渠道
 	}
 	if err := h.St.CreateChannel(r.Context(), c); err != nil {
 		writeInternalError(w, err)
@@ -115,11 +130,22 @@ func (h *ChannelHandler) get(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
+	if !canAccessChannel(authUser(r), c) {
+		writeError(w, http.StatusNotFound, "渠道不存在") // 404 语义，防枚举
+		return
+	}
 	writeJSON(w, http.StatusOK, toChannelResponse(c))
 }
 
 func (h *ChannelHandler) list(w http.ResponseWriter, r *http.Request) {
-	channels, err := h.St.ListChannels(r.Context())
+	u := authUser(r)
+	var channels []*store.Channel
+	var err error
+	if isAdmin(u) {
+		channels, err = h.St.ListChannelsAll(r.Context())
+	} else {
+		channels, err = h.St.ListChannelsVisible(r.Context(), u.ID)
+	}
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -145,6 +171,11 @@ func (h *ChannelHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
+	u := authUser(r)
+	if !canModifyChannel(u, c) {
+		writeError(w, http.StatusNotFound, "渠道不存在")
+		return
+	}
 	var p channelPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -167,6 +198,14 @@ func (h *ChannelHandler) update(w http.ResponseWriter, r *http.Request) {
 	if p.Enabled != nil {
 		c.Enabled = *p.Enabled
 	}
+	// 共享开关仅 admin 可改；admin 显式传 shared 时更新归属
+	if isAdmin(u) && p.Shared != nil {
+		if *p.Shared {
+			c.OwnerID = nil
+		} else if c.OwnerID == nil {
+			c.OwnerID = &u.ID
+		}
+	}
 	if err := h.St.UpdateChannel(r.Context(), c); err != nil {
 		writeInternalError(w, err)
 		return
@@ -178,6 +217,19 @@ func (h *ChannelHandler) update(w http.ResponseWriter, r *http.Request) {
 func (h *ChannelHandler) remove(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {
+		return
+	}
+	c, err := h.St.GetChannel(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if !canModifyChannel(authUser(r), c) {
+		writeError(w, http.StatusNotFound, "渠道不存在")
 		return
 	}
 	if n, err := h.St.ChannelUsageCount(r.Context(), id); err == nil && n > 0 {
@@ -203,6 +255,10 @@ func (h *ChannelHandler) test(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeInternalError(w, err)
+		return
+	}
+	if !canAccessChannel(authUser(r), c) {
+		writeError(w, http.StatusNotFound, "渠道不存在")
 		return
 	}
 	if h.TestSender == nil {

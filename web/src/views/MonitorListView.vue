@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import type { Monitor, MonitorState } from '@/api/types'
 import { listMonitors, batchMonitors, checkNow } from '@/api/monitors'
+import { useAuthStore } from '@/stores/auth'
 import { useSse } from '@/composables/useSse'
 import { useSourceTypes } from '@/composables/useSourceTypes'
 import StatusChip from '@/components/StatusChip.vue'
@@ -13,6 +14,7 @@ import VersionDiff from '@/components/VersionDiff.vue'
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 
 const loading = ref(true)
 const items = ref<Monitor[]>([])
@@ -28,6 +30,10 @@ const checkingIds = ref<Set<number>>(new Set())
 
 const { ensure: ensureSourceTypes, meta: sourceMeta } = useSourceTypes()
 onMounted(() => ensureSourceTypes())
+
+function refName(item: Monitor): string {
+  return item.reference_monitor_name || `#${item.reference_monitor_id}`
+}
 
 const stateOptions = [
   { title: '全部状态', value: '' },
@@ -45,16 +51,24 @@ const compareOptions = [
   { title: '领先 (Ahead)', value: 'ahead' },
 ]
 
-const headers = [
-  { title: '名称', key: 'name', sortable: true },
-  { title: '源', key: 'source_type', sortable: true },
-  { title: '当前', key: 'current_version', sortable: false },
-  { title: '最新', key: 'latest_version', sortable: false },
-  { title: '双轨对比', key: 'compare_state', sortable: false },
-  { title: '状态', key: 'state', sortable: true },
-  { title: '上次检查', key: 'last_checked_at', sortable: true },
-  { title: '操作', key: 'actions', sortable: false, align: 'end' as const },
-]
+const headers = computed(() => {
+  const cols: Array<{ title: string; key: string; sortable: boolean; align?: 'end' }> = [
+    { title: '名称', key: 'name', sortable: true },
+    { title: '源', key: 'source_type', sortable: true },
+  ]
+  if (auth.user?.role === 'admin') {
+    cols.push({ title: '所有者', key: 'owner_name', sortable: false })
+  }
+  cols.push(
+    { title: '当前', key: 'current_version', sortable: false },
+    { title: '最新', key: 'latest_version', sortable: false },
+    { title: '版本对比', key: 'compare_state', sortable: false },
+    { title: '状态', key: 'state', sortable: true },
+    { title: '上次检查', key: 'last_checked_at', sortable: true },
+    { title: '操作', key: 'actions', sortable: false, align: 'end' },
+  )
+  return cols
+})
 
 async function load() {
   loading.value = true
@@ -150,7 +164,7 @@ const hasSelected = computed(() => selected.value.length > 0)
         :items="compareOptions"
         item-title="title"
         item-value="value"
-        label="双轨对比"
+        label="版本对比"
         density="comfortable"
         hide-details
         style="max-width: 160px"
@@ -206,6 +220,9 @@ const hasSelected = computed(() => selected.value.length > 0)
           </template>
         </v-tooltip>
       </template>
+      <template v-if="auth.user?.role === 'admin'" #item.owner_name="{ item }">
+        <span class="text-medium-emphasis text-body-2">{{ item.owner_name || `#${item.owner_id ?? '—'}` }}</span>
+      </template>
       <template #item.current_version="{ item }">
         <code>{{ item.current_version || '—' }}</code>
       </template>
@@ -214,18 +231,27 @@ const hasSelected = computed(() => selected.value.length > 0)
       </template>
       <template #item.compare_state="{ item }">
         <template v-if="item.reference_monitor_id">
-          <v-chip v-if="item.compare_state === 'lagging'" size="small" color="error" variant="flat" label>
-            落后 ({{ item.compare_ref_version || '上游' }})
-          </v-chip>
-          <v-chip v-else-if="item.compare_state === 'in_sync'" size="small" color="success" variant="tonal" label>
-            一致
-          </v-chip>
-          <v-chip v-else-if="item.compare_state === 'ahead'" size="small" color="purple" variant="tonal" label>
-            领先
-          </v-chip>
-          <v-chip v-else size="small" variant="text" label class="text-medium-emphasis">
-            待对比
-          </v-chip>
+          <v-tooltip
+            :text="`对比「${refName(item)}」：本地 ${item.current_version || '—'} vs 参照 ${item.compare_ref_version || '—'}`"
+            location="top"
+          >
+            <template #activator="{ props: tooltipProps }">
+              <span v-bind="tooltipProps" class="cursor-default">
+                <v-chip v-if="item.compare_state === 'lagging'" size="small" color="error" variant="flat" label>
+                  落后 · {{ refName(item) }}
+                </v-chip>
+                <v-chip v-else-if="item.compare_state === 'in_sync'" size="small" color="success" variant="tonal" label>
+                  一致 · {{ refName(item) }}
+                </v-chip>
+                <v-chip v-else-if="item.compare_state === 'ahead'" size="small" color="purple" variant="tonal" label>
+                  领先 · {{ refName(item) }}
+                </v-chip>
+                <v-chip v-else size="small" variant="text" label class="text-medium-emphasis">
+                  待对比 · {{ refName(item) }}
+                </v-chip>
+              </span>
+            </template>
+          </v-tooltip>
         </template>
         <span v-else class="text-disabled">—</span>
       </template>

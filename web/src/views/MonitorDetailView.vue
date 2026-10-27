@@ -44,7 +44,8 @@ onMounted(async () => {
 
 async function reload() {
   monitor.value = await getMonitor(id.value)
-  if (monitor.value?.reference_monitor_id) {
+  // 后端现已随监控返回 reference_monitor_name；旧字段兜底逻辑保留
+  if (monitor.value?.reference_monitor_id && !monitor.value.reference_monitor_name) {
     getMonitor(monitor.value.reference_monitor_id)
       .then(r => { refMonitorName.value = r.name })
       .catch(() => { refMonitorName.value = '' })
@@ -55,6 +56,9 @@ async function reload() {
   history.value = h.items
   changes.value = c.items
 }
+
+const refDisplayName = computed(() =>
+  monitor.value?.reference_monitor_name || refMonitorName.value || `#${monitor.value?.reference_monitor_id}`)
 
 // SSE 实时更新：收到本条监控的检查完成通知时立即刷新详情与历史
 useSse('check.done', (data: any) => {
@@ -191,7 +195,7 @@ async function doDelete() {
             <span><RelativeTime :time="monitor.last_checked_at" /></span>
           </div>
           <div v-if="monitor.reference_monitor_id" class="mt-4 pt-4 border-t">
-            <div class="text-subtitle-2 font-weight-medium mb-2">双轨对比</div>
+            <div class="text-subtitle-2 font-weight-medium mb-2">版本对比</div>
             <div class="d-flex justify-space-between align-center py-1">
               <span class="text-medium-emphasis">对比状态</span>
               <v-chip v-if="monitor.compare_state === 'lagging'" size="small" color="error" variant="flat" label>落后</v-chip>
@@ -200,13 +204,17 @@ async function doDelete() {
               <v-chip v-else size="small" variant="text" label>待对比</v-chip>
             </div>
             <div class="d-flex justify-space-between py-1">
-              <span class="text-medium-emphasis">上游参照</span>
+              <span class="text-medium-emphasis">参照监控</span>
               <router-link :to="`/monitors/${monitor.reference_monitor_id}`" class="text-decoration-none">
-                {{ refMonitorName || `#${monitor.reference_monitor_id}` }}
+                {{ refDisplayName }}
               </router-link>
             </div>
             <div class="d-flex justify-space-between py-1">
-              <span class="text-medium-emphasis">上游版本</span>
+              <span class="text-medium-emphasis">本地版本</span>
+              <code>{{ monitor.current_version || '—' }}</code>
+            </div>
+            <div class="d-flex justify-space-between py-1">
+              <span class="text-medium-emphasis">参照版本</span>
               <code>{{ monitor.compare_ref_version || '—' }}</code>
             </div>
             <div v-if="monitor.compare_since" class="d-flex justify-space-between py-1">

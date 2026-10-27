@@ -55,7 +55,7 @@ func (d *Dispatcher) enqueue(ctx context.Context, monitor *store.Monitor, change
 	if len(m.ChannelIDs) == 0 {
 		return nil
 	}
-	channels, err := d.Store.ListChannels(ctx)
+	channels, err := d.Store.ListChannelsAll(ctx)
 	if err != nil {
 		return err
 	}
@@ -123,7 +123,7 @@ func (d *Dispatcher) EnqueueCompare(ctx context.Context, follower, ref *store.Mo
 	if len(m.ChannelIDs) == 0 {
 		return nil
 	}
-	channels, err := d.Store.ListChannels(ctx)
+	channels, err := d.Store.ListChannelsAll(ctx)
 	if err != nil {
 		return err
 	}

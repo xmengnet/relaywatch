@@ -5,6 +5,34 @@ import (
 	"time"
 )
 
+// Can 判定细粒度权限：admin 恒真；显式配置的 Permissions 优先；nil 按角色默认。
+func (u *User) Can(perm string) bool {
+	if u == nil {
+		return false
+	}
+	if u.Role == "admin" {
+		return true
+	}
+	perms := u.Permissions
+	if perms == nil {
+		perms = DefaultPermissions(u.Role)
+	}
+	for _, p := range perms {
+		if p == perm {
+			return true
+		}
+	}
+	return false
+}
+
+// UserFilter 用户管理列表查询条件（admin 用）。
+type UserFilter struct {
+	Role    string // 空 = 全部
+	Search  string // 匹配用户名/邮箱/显示名
+	Page    int
+	PerPage int
+}
+
 // MonitorState 监控状态机。
 type MonitorState string
 
@@ -21,13 +49,40 @@ type User struct {
 	ID           int64
 	Username     string
 	Email        string
+	DisplayName  string
 	PasswordHash []byte // OIDC 用户为 nil
-	Role         string // admin | viewer
+	Role         string // admin | user | viewer
+	Permissions  []string // 细粒度操作权限（见 Permission* 常量）；nil = 未配置（按角色默认）
 	OIDCProvider string
 	OIDCSubject  string
 	Disabled     bool
 	CreatedAt    time.Time
 	LastLoginAt  *time.Time
+}
+
+// 细粒度权限项。admin 恒有全部权限；user/viewer 按用户配置，
+// 未配置（nil）时回退到角色默认（DefaultPermissions）。
+const (
+	PermCreateMonitor = "monitor.create"
+	PermCreateChannel = "channel.create"
+	PermImport        = "import"
+	PermExport        = "export"
+)
+
+// AllPermissions 全部权限项（用户管理 UI 用此顺序展示）。
+var AllPermissions = []string{PermCreateMonitor, PermCreateChannel, PermImport, PermExport}
+
+// DefaultPermissions 角色默认权限：user 可建监控/渠道/导入/导出，viewer 全只读。
+// Permissions 字段为 nil 时按此回退；显式空数组 = 全部禁用。
+func DefaultPermissions(role string) []string {
+	switch role {
+	case "admin":
+		return AllPermissions
+	case "viewer":
+		return nil
+	default: // user
+		return AllPermissions
+	}
 }
 
 // Session 登录会话。
@@ -57,6 +112,7 @@ type APIToken struct {
 // Monitor 一条监控记录。
 type Monitor struct {
 	ID                  int64
+	OwnerID             int64 // 归属用户；0 = 未归属（迁移回填前的存量）
 	Name                string
 	SourceType          string
 	SourceConfig        string // JSON
@@ -99,6 +155,7 @@ type MonitorFilter struct {
 	CompareState string
 	Tag          string
 	Search       string
+	OwnerID      int64 // 0 = 不过滤（仅 admin 允许）；>0 = 只看该用户
 	Page         int
 	PerPage      int
 	SortBy       string
@@ -130,6 +187,7 @@ type VersionChange struct {
 // Channel 通知渠道。
 type Channel struct {
 	ID        int64
+	OwnerID   *int64 // NULL = 全局共享渠道（admin 建，所有用户可引用）
 	Name      string
 	Type      string // telegram | webhook | ...
 	Config    string // JSON，敏感字段（M4 加密）

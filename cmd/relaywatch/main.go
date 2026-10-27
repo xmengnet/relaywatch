@@ -105,8 +105,16 @@ func main() {
 		MaxDelay:    cfg.Notifications.Retry.MaxDelay,
 	}
 		broker := httpapi.NewEventBroker()
+		// SSE 归属解析：monitorID → ownerID（admin 收全量，普通用户只收自己的）
+		broker.OwnerOf = func(monitorID int64) (int64, bool) {
+			m, err := st.GetMonitor(context.Background(), monitorID)
+			if err != nil {
+				return 0, false
+			}
+			return m.OwnerID, true
+		}
 		checker.OnEvent = func(ev check.Event) {
-			broker.Broadcast("check.done", ev)
+			broker.BroadcastMonitor("check.done", ev.MonitorID, ev)
 		}
 
 		evaluator := compare.NewEvaluator(st, dispatcher.EnqueueCompare)

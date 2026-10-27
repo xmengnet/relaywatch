@@ -1,0 +1,6 @@
+/* Vuetify 4 默认 details 区高 22px，校验消息(14px)顶对齐后与下一个控件仅剩 8px，
+   中文渲染下视觉上贴住/重叠下一个输入框，这里补一点底部间距。 */
+.v-input__details {
+  min-height: 24px;
+  padding-bottom: 4px;
+}

@@ -29,7 +29,10 @@ export interface NotifierMeta {
 export interface Delivery {
   id: number
   monitor_id: number
+  monitor_name?: string
   channel_id: number
+  channel_name?: string
+  kind: 'update' | 'compare'
   change_id?: number
   payload?: string
   status: 'pending' | 'sent' | 'failed' | 'deferred' | 'canceled'
@@ -76,10 +79,17 @@ export function resendDelivery(id: number) {
   return apiFetch<Delivery>(`/deliveries/${id}/resend`, { method: 'POST' })
 }
 
-export function getSettings() {
-  return apiFetch<{ alert_channel_ids: number[] }>('/settings')
+export interface AppSettings {
+  alert_channel_ids: number[]
+  registration_enabled: boolean
+  registration_default_role: string
+  registration_require_email: boolean
 }
 
-export function putSettings(p: { alert_channel_ids: number[] }) {
-  return apiFetch<{ alert_channel_ids: number[] }>('/settings', { method: 'PUT', body: JSON.stringify(p) })
+export function getSettings() {
+  return apiFetch<AppSettings>('/settings')
+}
+
+export function putSettings(p: Partial<AppSettings>) {
+  return apiFetch<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(p) })
 }

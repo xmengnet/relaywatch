@@ -70,7 +70,7 @@ const cards = [
             <span class="mx-2">·</span>
             <VersionDiff :old-version="m.current_version" :new-version="m.latest_version" />
             <v-chip v-if="m.compare_state === 'lagging'" size="x-small" color="error" class="ms-2" label>
-              落后 ({{ m.compare_ref_version }})
+              落后 · {{ m.reference_monitor_name || m.compare_ref_version || '上游' }}
             </v-chip>
             <span v-if="m.last_error" class="text-error"> {{ m.last_error }}</span>
           </v-list-item-subtitle>

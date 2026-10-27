@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,7 +12,29 @@ import (
 
 // AuthHandler 登录、登出、首次引导、状态查询。
 type AuthHandler struct {
-	Svc *auth.Service
+	Svc   *auth.Service
+	Store store.Store
+}
+
+const (
+	settingRegistrationEnabled  = "registration.enabled"
+	settingRegistrationRole     = "registration.default_role"
+	settingRegistrationNeedMail = "registration.require_email"
+)
+
+// registrationEnabled 注册开关（默认关闭）。
+func registrationEnabled(ctx context.Context, st store.Store) bool {
+	v, err := st.GetSetting(ctx, settingRegistrationEnabled)
+	return err == nil && v == "true"
+}
+
+// registrationDefaultRole 注册默认角色（user | viewer，默认 user）。
+func registrationDefaultRole(ctx context.Context, st store.Store) string {
+	v, err := st.GetSetting(ctx, settingRegistrationRole)
+	if err == nil && (v == "user" || v == "viewer") {
+		return v
+	}
+	return "user"
 }
 
 // status 返回是否需要初始化、当前用户、CSRF token。匿名可达。
@@ -22,9 +45,10 @@ func (h *AuthHandler) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{
-		"setup_required": !has,
-		"user":           nil,
-		"csrf_token":     "",
+		"setup_required":    !has,
+		"user":              nil,
+		"csrf_token":        "",
+		"registration_open": h.Store != nil && registrationEnabled(r.Context(), h.Store),
 	}
 	if u := auth.UserFromContext(r.Context()); u != nil {
 		resp["user"] = toUserResponse(u)
@@ -120,4 +144,53 @@ func clientIP(r *http.Request) string {
 		return v
 	}
 	return r.RemoteAddr
+}
+
+// register 自助注册：仅 registration.enabled 时开放；关闭时 404 防探测。
+func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
+	if !registrationEnabled(r.Context(), h.Store) {
+		writeError(w, http.StatusNotFound, "未开放注册")
+		return
+	}
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.Username == "" || len(req.Password) < 8 {
+		writeError(w, http.StatusBadRequest, "用户名不能为空，密码至少 8 个字符")
+		return
+	}
+	if _, err := h.Store.UserByUsername(r.Context(), req.Username); err == nil {
+		writeError(w, http.StatusConflict, "用户名已被占用")
+		return
+	}
+	u := &store.User{
+		Username: req.Username,
+		Email:    req.Email,
+		Role:     registrationDefaultRole(r.Context(), h.Store),
+	}
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	u.PasswordHash = hash
+	if err := h.Store.CreateUser(r.Context(), u); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	_ = h.Store.AddAudit(r.Context(), &store.AuditEntry{
+		Action: "user.register", Target: u.Username, IP: clientIP(r),
+	})
+	sess, err := h.newSession(w, r, u)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"user": toUserResponse(u), "csrf_token": sess.CSRFToken})
 }

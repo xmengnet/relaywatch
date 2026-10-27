@@ -1,0 +1,14 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <!-- favicon：浅色标签栏用墨黑底托；深色标签栏（prefers-color-scheme: dark）用裸图形。
+       小尺寸笔画加粗、省略 45% 透明拖尾弧。 -->
+  <style>
+    .pad { display: block; }
+    @media (prefers-color-scheme: dark) {
+      .pad { display: none; }
+    }
+  </style>
+  <rect class="pad" width="64" height="64" rx="14" fill="#131316"/>
+  <path d="M14 52 C14 32 30 14 50 14" fill="none" stroke="#FF6B2C" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="13" cy="51" r="11" fill="#FF6B2C"/>
+  <circle cx="50" cy="13" r="11" fill="none" stroke="#FF6B2C" stroke-width="7"/>
+</svg>

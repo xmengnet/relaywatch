@@ -56,7 +56,7 @@ onMounted(async () => {
     const currentId = route.params.id ? Number(route.params.id) : null
     const valid = r.items.filter(item => item.id !== currentId && !item.reference_monitor_id)
     referenceOptions.value = [
-      { title: '无（不开启双轨对比）', value: null },
+      { title: '无（不开启版本对比）', value: null },
       ...valid.map(item => ({
         title: `${item.name} (${item.source_type})`,
         value: item.id,
@@ -181,7 +181,7 @@ async function submit() {
         </v-card>
 
         <v-card class="pa-6 mb-4">
-          <div class="text-subtitle-1 font-weight-medium mb-1">双轨对比（上游参照）</div>
+          <div class="text-subtitle-1 font-weight-medium mb-1">版本对比（参照监控）</div>
           <div class="text-body-2 text-medium-emphasis mb-4">
             将当前监控（如 AUR 打包）绑定一个上游参照（如 GitHub Release）。系统会在每次检查后自动对比两侧版本，并在落后或追平时触发提醒（AUR 源自动对齐 pkgrel）。
           </div>

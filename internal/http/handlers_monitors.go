@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,15 +34,44 @@ func (h *MonitorHandler) routes(r chi.Router) {
 	})
 }
 
+// getMonitorForAccess 按 id 取监控并做归属校验：admin 全通，普通用户仅自己的。
+// 一律 404 语义（含无权限），避免资源枚举。
+func (h *MonitorHandler) getMonitorForAccess(w http.ResponseWriter, r *http.Request) (*store.Monitor, bool) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return nil, false
+	}
+	m, err := h.St.GetMonitor(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "监控不存在")
+		return nil, false
+	}
+	if err != nil {
+		writeInternalError(w, err)
+		return nil, false
+	}
+	if !canAccessMonitor(authUser(r), m) {
+		writeError(w, http.StatusNotFound, "监控不存在")
+		return nil, false
+	}
+	return m, true
+}
+
 func (h *MonitorHandler) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.MonitorFilter{
 		State:        store.MonitorState(q.Get("state")),
 		CompareState: q.Get("compare"),
 		Tag:          q.Get("tag"),
-		Search:    q.Get("q"),
-		SortBy:    q.Get("sort"),
-		SortOrder: q.Get("order"),
+		Search:       q.Get("q"),
+		SortBy:       q.Get("sort"),
+		SortOrder:    q.Get("order"),
+	}
+	// admin 可用 ?owner_id= 按用户筛选；普通用户强制只看自己
+	if v := q.Get("owner_id"); v != "" && isAdmin(authUser(r)) {
+		f.OwnerID, _ = strconv.ParseInt(v, 10, 64)
+	} else {
+		f.OwnerID = scopeOwnerID(r)
 	}
 	f.Page, _ = strconv.Atoi(q.Get("page"))
 	f.PerPage, _ = strconv.Atoi(q.Get("per_page"))
@@ -55,9 +85,28 @@ func (h *MonitorHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*monitorResponse, 0, len(items))
 	for _, m := range items {
-		out = append(out, toMonitorResponse(m))
+		resp := toMonitorResponse(m)
+		if m.ReferenceMonitorID != nil {
+			resp.ReferenceMonitorName = refMonitorName(h.St, r.Context(), *m.ReferenceMonitorID)
+		}
+		// admin 列表附 owner 名，用于「所有者」列
+		if m.OwnerID > 0 && isAdmin(authUser(r)) {
+			if u, err := h.St.UserByID(r.Context(), m.OwnerID); err == nil {
+				resp.OwnerName = u.Username
+			}
+		}
+		out = append(out, resp)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out, "total": total})
+}
+
+// refMonitorName 查参照监控名称；已删除时返回 "#id" 降级显示。
+func refMonitorName(st store.Store, ctx context.Context, refID int64) string {
+	m, err := st.GetMonitor(ctx, refID)
+	if err != nil || m == nil || m.Name == "" {
+		return fmt.Sprintf("#%d", refID)
+	}
+	return m.Name
 }
 
 type monitorPayload struct {
@@ -95,7 +144,8 @@ func (p *monitorPayload) validate() error {
 	return nil
 }
 
-func (h *MonitorHandler) validateReference(ctx context.Context, selfID int64, refID *int64) error {
+// validateReference 校验参照绑定；另校验参照归属——普通用户只能引用同 owner 的参照。
+func (h *MonitorHandler) validateReference(ctx context.Context, selfID, selfOwner int64, refID *int64) error {
 	if refID == nil {
 		return nil
 	}
@@ -108,6 +158,10 @@ func (h *MonitorHandler) validateReference(ctx context.Context, selfID int64, re
 	}
 	if err != nil {
 		return err
+	}
+	u := authUserFromCtx(ctx)
+	if u != nil && u.Role != "admin" && ref.OwnerID != selfOwner {
+		return errors.New("参照监控不存在") // 归属不符按不存在处理，防枚举
 	}
 	if ref.ReferenceMonitorID != nil {
 		return errors.New("参照监控不能已有上游参照（仅支持单层参照）")
@@ -135,8 +189,13 @@ func (h *MonitorHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateReference(r.Context(), 0, p.ReferenceMonitorID); err != nil {
+	u := authUser(r)
+	if err := h.validateReference(r.Context(), 0, u.ID, p.ReferenceMonitorID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !u.Can(store.PermCreateMonitor) {
+		forbidPermission(w, "创建监控")
 		return
 	}
 	if p.IntervalSec == 0 {
@@ -144,6 +203,7 @@ func (h *MonitorHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	m := payloadToMonitor(&p)
 	m.State = store.StateUnknown
+	m.OwnerID = u.ID // 创建归属强制当前用户，不接受请求体传入
 	if err := h.St.CreateMonitor(r.Context(), m); err != nil {
 		writeInternalError(w, err)
 		return
@@ -160,36 +220,23 @@ func (h *MonitorHandler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MonitorHandler) get(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
+	m, ok := h.getMonitorForAccess(w, r)
 	if !ok {
 		return
 	}
-	m, err := h.St.GetMonitor(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "监控不存在")
-		return
+	resp := toMonitorResponse(m)
+	if m.ReferenceMonitorID != nil {
+		resp.ReferenceMonitorName = refMonitorName(h.St, r.Context(), *m.ReferenceMonitorID)
 	}
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, toMonitorResponse(m))
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *MonitorHandler) update(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
+	m, ok := h.getMonitorForAccess(w, r)
 	if !ok {
 		return
 	}
-	m, err := h.St.GetMonitor(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "监控不存在")
-		return
-	}
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
+	id := m.ID
 	var p monitorPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -203,7 +250,7 @@ func (h *MonitorHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateReference(r.Context(), id, p.ReferenceMonitorID); err != nil {
+	if err := h.validateReference(r.Context(), id, m.OwnerID, p.ReferenceMonitorID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -224,10 +271,11 @@ func (h *MonitorHandler) update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MonitorHandler) remove(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
+	m, ok := h.getMonitorForAccess(w, r)
 	if !ok {
 		return
 	}
+	id := m.ID
 	_ = h.St.ClearFollowerReferences(r.Context(), id)
 	if err := h.St.DeleteMonitor(r.Context(), id); err != nil {
 		writeInternalError(w, err)
@@ -238,8 +286,8 @@ func (h *MonitorHandler) remove(w http.ResponseWriter, r *http.Request) {
 
 func (h *MonitorHandler) batch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Action string   `json:"action"`
-		IDs    []int64  `json:"ids"`
+		Action string  `json:"action"`
+		IDs    []int64 `json:"ids"`
 		Fields *struct {
 			Enabled *bool `json:"enabled"`
 		} `json:"fields"`
@@ -252,6 +300,8 @@ func (h *MonitorHandler) batch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids 不能为空")
 		return
 	}
+	u := authUser(r)
+	isAdminUser := isAdmin(u)
 	var affected int64
 	for _, id := range req.IDs {
 		m, err := h.St.GetMonitor(r.Context(), id)
@@ -261,6 +311,10 @@ func (h *MonitorHandler) batch(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeInternalError(w, err)
 			return
+		}
+		// 普通用户批量操作只作用于自己的资源，他人资源静默跳过
+		if !isAdminUser && m.OwnerID != u.ID {
+			continue
 		}
 		switch req.Action {
 		case "enable":

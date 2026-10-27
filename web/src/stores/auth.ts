@@ -8,11 +8,13 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
   const loaded = ref(false)
   const setupRequired = ref(false)
+  const registrationOpen = ref(false)
 
   async function load() {
     const status = await authApi.authStatus()
     user.value = status.user
     setupRequired.value = status.setup_required
+    registrationOpen.value = status.registration_open ?? false
     loaded.value = true
     if (status.user && status.csrf_token) {
       // 已登录（含页面刷新后）：直接取回该会话的 CSRF token
@@ -48,5 +50,12 @@ export const useAuthStore = defineStore('auth', () => {
     setCsrf('')
   }
 
-  return { user, loaded, setupRequired, load, login, setup, logout }
+  async function register(username: string, password: string, email?: string) {
+    const { register: registerApi } = await import('@/api/users')
+    const r = await registerApi({ username, password, email })
+    user.value = r.user
+    setCsrf(r.csrf_token)
+  }
+
+  return { user, loaded, setupRequired, registrationOpen, load, login, setup, register, logout }
 })

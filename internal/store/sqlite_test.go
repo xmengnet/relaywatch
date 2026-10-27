@@ -22,7 +22,13 @@ func TestStoreMonitorPatterns(t *testing.T) {
 		t.Fatalf("Migrate: %v", err)
 	}
 
+	admin := &User{Username: "admin", PasswordHash: []byte("x"), Role: "admin"}
+	if err := st.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
 	m := &Monitor{
+		OwnerID:             admin.ID,
 		Name:                "test-monitor",
 		SourceType:          "github_release",
 		SourceConfig:        `{"repo":"owner/repo"}`,
@@ -69,6 +75,7 @@ func TestStoreMonitorPatterns(t *testing.T) {
 	// 参照关联测试
 	refID := m.ID
 	follower := &Monitor{
+		OwnerID:            admin.ID,
 		Name:               "aur-follower",
 		SourceType:         "aur",
 		SourceConfig:       `{"pkgname":"test"}`,

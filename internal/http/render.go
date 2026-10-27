@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
@@ -25,5 +26,6 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func writeInternalError(w http.ResponseWriter, err error) {
+	slog.Error("internal server error", "err", err)
 	writeError(w, http.StatusInternalServerError, err.Error())
 }

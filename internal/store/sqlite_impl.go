@@ -16,10 +16,15 @@ var ErrNotFound = errors.New("not found")
 // ---------- 用户 ----------
 
 func (s *sqliteStore) CreateUser(ctx context.Context, u *User) error {
+	var permsArg any
+	if u.Permissions != nil {
+		b, _ := json.Marshal(u.Permissions)
+		permsArg = string(b)
+	}
 	res, err := s.db.exec(ctx, `INSERT INTO users
-		(username, email, password_hash, role, oidc_provider, oidc_subject, disabled, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		u.Username, nullString(u.Email), u.PasswordHash, u.Role,
+		(username, email, display_name, password_hash, role, permissions, oidc_provider, oidc_subject, disabled, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.Username, nullString(u.Email), u.DisplayName, u.PasswordHash, u.Role, permsArg,
 		nullString(u.OIDCProvider), nullString(u.OIDCSubject), boolInt(u.Disabled), formatTime(time.Now()))
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
@@ -30,10 +35,10 @@ func (s *sqliteStore) CreateUser(ctx context.Context, u *User) error {
 
 func (s *sqliteStore) userFromRow(scan func(dest ...any) error) (*User, error) {
 	u := &User{}
-	var passwordHash, email, oidcProvider, oidcSubject sql.NullString
+	var passwordHash, email, displayName, oidcProvider, oidcSubject, permsJSON sql.NullString
 	var lastLogin sql.NullString
 	var disabled int
-	err := scan(&u.ID, &u.Username, &email, &passwordHash, &u.Role,
+	err := scan(&u.ID, &u.Username, &email, &displayName, &passwordHash, &u.Role, &permsJSON,
 		&oidcProvider, &oidcSubject, &disabled, &u.CreatedAt, &lastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -42,7 +47,11 @@ func (s *sqliteStore) userFromRow(scan func(dest ...any) error) (*User, error) {
 		return nil, err
 	}
 	u.Email = email.String
+	u.DisplayName = displayName.String
 	u.PasswordHash = []byte(passwordHash.String)
+	if permsJSON.Valid && permsJSON.String != "" {
+		_ = json.Unmarshal([]byte(permsJSON.String), &u.Permissions)
+	}
 	u.OIDCProvider = oidcProvider.String
 	u.OIDCSubject = oidcSubject.String
 	u.Disabled = disabled != 0
@@ -55,7 +64,7 @@ func (s *sqliteStore) userFromRow(scan func(dest ...any) error) (*User, error) {
 	return u, nil
 }
 
-const userCols = `id, username, email, password_hash, role, oidc_provider, oidc_subject, disabled, created_at, last_login_at`
+const userCols = `id, username, email, display_name, password_hash, role, permissions, oidc_provider, oidc_subject, disabled, created_at, last_login_at`
 
 func (s *sqliteStore) UserByUsername(ctx context.Context, name string) (*User, error) {
 	return s.userFromRow(func(dest ...any) error {
@@ -83,6 +92,113 @@ func (s *sqliteStore) UpdateUserPassword(ctx context.Context, id int64, hash []b
 func (s *sqliteStore) UpdateUserLogin(ctx context.Context, id int64, at time.Time) error {
 	_, err := s.db.exec(ctx, `UPDATE users SET last_login_at = ? WHERE id = ?`, formatTime(at), id)
 	return err
+}
+
+// ---------- 用户管理（M8） ----------
+
+func (s *sqliteStore) ListUsers(ctx context.Context, f UserFilter) ([]*User, int, error) {
+	where := []string{"1=1"}
+	var args []any
+	if f.Role != "" {
+		where = append(where, "role = ?")
+		args = append(args, f.Role)
+	}
+	if f.Search != "" {
+		where = append(where, "(username LIKE ? OR email LIKE ? OR display_name LIKE ?)")
+		pat := "%" + f.Search + "%"
+		args = append(args, pat, pat, pat)
+	}
+	whereSQL := strings.Join(where, " AND ")
+
+	var total int64
+	if err := s.db.queryRow(ctx, `SELECT COUNT(*) FROM users WHERE `+whereSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if f.PerPage <= 0 {
+		f.PerPage = 25
+	}
+	if f.Page <= 0 {
+		f.Page = 1
+	}
+	offset := (f.Page - 1) * f.PerPage
+	rows, err := s.db.query(ctx,
+		`SELECT `+userCols+` FROM users WHERE `+whereSQL+` ORDER BY id LIMIT ? OFFSET ?`,
+		append(args, f.PerPage, offset)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		u, err := s.userFromRow(rows.Scan)
+		if err != nil {
+			return nil, 0, err
+		}
+		u.PasswordHash = nil // 列表不带哈希
+		out = append(out, u)
+	}
+	return out, int(total), rows.Err()
+}
+
+// UpdateUserProfile 更新资料字段；PasswordHash 为 nil 时不动密码。
+func (s *sqliteStore) UpdateUserProfile(ctx context.Context, u *User) error {
+	var hash any
+	if u.PasswordHash != nil {
+		hash = u.PasswordHash
+	}
+	var permsArg any
+	if u.Permissions != nil {
+		b, _ := json.Marshal(u.Permissions)
+		permsArg = string(b)
+	}
+	_, err := s.db.exec(ctx, `UPDATE users SET
+		email = ?, display_name = ?, role = ?, permissions = ?, password_hash = COALESCE(?, password_hash)
+		WHERE id = ?`,
+		nullString(u.Email), u.DisplayName, u.Role, permsArg, hash, u.ID)
+	return err
+}
+
+func (s *sqliteStore) SetUserDisabled(ctx context.Context, id int64, disabled bool) error {
+	_, err := s.db.exec(ctx, `UPDATE users SET disabled = ? WHERE id = ?`, boolInt(disabled), id)
+	return err
+}
+
+func (s *sqliteStore) HasEnabledAdmin(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.db.queryRow(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0`).Scan(&n)
+	return n, err
+}
+
+// CountMonitorsByOwner 用户名下监控数（用户列表展示用）。
+func (s *sqliteStore) CountMonitorsByOwner(ctx context.Context, ownerID int64) (int64, error) {
+	var n int64
+	err := s.db.queryRow(ctx, `SELECT COUNT(*) FROM monitors WHERE owner_id = ?`, ownerID).Scan(&n)
+	return n, err
+}
+
+// DeleteUserTransferResources 删除用户：监控/渠道转移给 toUserID，会话与 Token 级联删除。
+func (s *sqliteStore) DeleteUserTransferResources(ctx context.Context, userID, toUserID int64) error {
+	tx, err := s.db.begin(ctx)
+	if err != nil {
+		return err
+	}
+	stmts := []struct {
+		q    string
+		args []any
+	}{
+		{`UPDATE OR FAIL monitors SET owner_id = ? WHERE owner_id = ?`, []any{toUserID, userID}},
+		{`UPDATE OR FAIL channels SET owner_id = ? WHERE owner_id = ?`, []any{toUserID, userID}},
+		{`DELETE FROM sessions WHERE user_id = ?`, []any{userID}},
+		{`DELETE FROM api_tokens WHERE user_id = ?`, []any{userID}},
+		{`DELETE FROM users WHERE id = ?`, []any{userID}},
+	}
+	for _, st := range stmts {
+		if _, err := tx.exec(ctx, st.q, st.args...); err != nil {
+			tx.rollback()
+			return fmt.Errorf("delete user transfer: %w", err)
+		}
+	}
+	return tx.commit()
 }
 
 // ---------- 会话 ----------
@@ -126,6 +242,38 @@ func (s *sqliteStore) SessionByID(ctx context.Context, id string) (*Session, err
 func (s *sqliteStore) RevokeSession(ctx context.Context, id string) error {
 	_, err := s.db.exec(ctx, `UPDATE sessions SET revoked_at = ? WHERE id = ?`, formatTime(time.Now()), id)
 	return err
+}
+
+// RevokeUserSessions 吊销某用户全部未吊销且未过期的会话（禁用/重置密码用）。
+func (s *sqliteStore) RevokeUserSessions(ctx context.Context, userID int64) (int64, error) {
+	res, err := s.db.exec(ctx,
+		`UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?`,
+		formatTime(time.Now()), userID, formatTime(time.Now()))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ListSessionsByUser 用户全部未吊销且未过期的会话，创建时间倒序。
+func (s *sqliteStore) ListSessionsByUser(ctx context.Context, userID int64) ([]*Session, error) {
+	rows, err := s.db.query(ctx,
+		`SELECT `+sessionCols+` FROM sessions WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+		 ORDER BY created_at DESC`, userID, formatTime(time.Now()))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Session
+	for rows.Next() {
+		sess, err := s.sessionFromRow(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		sess.CSRFToken = "" // 列表不回传 CSRF token
+		out = append(out, sess)
+	}
+	return out, rows.Err()
 }
 
 func (s *sqliteStore) DeleteExpiredSessions(ctx context.Context) (int64, error) {
@@ -215,7 +363,7 @@ func (s *sqliteStore) TouchAPIToken(ctx context.Context, id int64) error {
 
 // ---------- 监控 ----------
 
-const monitorCols = `id, name, source_type, source_config, version_prefix, version_suffix,
+const monitorCols = `id, owner_id, name, source_type, source_config, version_prefix, version_suffix,
 	version_include_regex, version_ignore_regex, from_pattern, to_pattern, interval_sec, enabled, state,
 	current_version, latest_version, last_checked_at, last_success_at, last_change_at,
 	last_error, consecutive_failures, notify_cooldown_sec, last_notified_at,
@@ -229,7 +377,7 @@ func (s *sqliteStore) monitorFromRow(scan func(dest ...any) error) (*Monitor, er
 	var state string
 	var refID sql.NullInt64
 	var cmpState, cmpRefVer, cmpSince, cmpNotifiedRef sql.NullString
-	err := scan(&m.ID, &m.Name, &m.SourceType, &m.SourceConfig, &prefix, &suffix,
+	err := scan(&m.ID, &m.OwnerID, &m.Name, &m.SourceType, &m.SourceConfig, &prefix, &suffix,
 		&incRe, &ignRe, &fromPat, &toPat, &m.IntervalSec, &enabled, &state,
 		&current, &latest, &lastChecked, &lastSuccess, &lastChange,
 		&lastErr, &m.ConsecutiveFailures, &m.NotifyCooldownSec, &lastNotified,
@@ -293,11 +441,11 @@ func (s *sqliteStore) CreateMonitor(ctx context.Context, m *Monitor) error {
 	now := time.Now()
 	storedConfig := s.encField(m.SourceConfig)
 	res, err := s.db.exec(ctx, `INSERT INTO monitors
-		(name, source_type, source_config, version_prefix, version_suffix,
+		(owner_id, name, source_type, source_config, version_prefix, version_suffix,
 		 version_include_regex, version_ignore_regex, from_pattern, to_pattern, interval_sec, enabled, state,
 		 current_version, latest_version, notify_cooldown_sec, tags, note, reference_monitor_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.Name, m.SourceType, storedConfig, nullString(m.VersionPrefix), nullString(m.VersionSuffix),
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.OwnerID, m.Name, m.SourceType, storedConfig, nullString(m.VersionPrefix), nullString(m.VersionSuffix),
 		nullString(m.VersionIncludeRegex), nullString(m.VersionIgnoreRegex), nullString(m.FromPattern), nullString(m.ToPattern),
 		m.IntervalSec, boolInt(m.Enabled), string(m.State),
 		nullString(m.CurrentVersion), nullString(m.LatestVersion), m.NotifyCooldownSec, string(tagsJSON), nullString(m.Note),
@@ -346,6 +494,10 @@ func (s *sqliteStore) monitorChannelIDs(ctx context.Context, monitorID int64) ([
 func (s *sqliteStore) ListMonitors(ctx context.Context, f MonitorFilter) ([]*Monitor, int, error) {
 	where := []string{"1=1"}
 	var args []any
+	if f.OwnerID > 0 {
+		where = append(where, "owner_id = ?")
+		args = append(args, f.OwnerID)
+	}
 	if f.State != "" {
 		where = append(where, "state = ?")
 		args = append(args, string(f.State))
@@ -430,26 +582,26 @@ func (s *sqliteStore) ListMonitors(ctx context.Context, f MonitorFilter) ([]*Mon
 	return out, total, nil
 }
 
-	func (s *sqliteStore) UpdateMonitor(ctx context.Context, m *Monitor) error {
-		tagsJSON, _ := json.Marshal(m.Tags)
-		storedConfig := s.encField(m.SourceConfig)
-		_, err := s.db.exec(ctx, `UPDATE monitors SET
+func (s *sqliteStore) UpdateMonitor(ctx context.Context, m *Monitor) error {
+	tagsJSON, _ := json.Marshal(m.Tags)
+	storedConfig := s.encField(m.SourceConfig)
+	_, err := s.db.exec(ctx, `UPDATE monitors SET
 			name = ?, source_type = ?, source_config = ?, version_prefix = ?, version_suffix = ?,
 			version_include_regex = ?, version_ignore_regex = ?, from_pattern = ?, to_pattern = ?,
 			interval_sec = ?, enabled = ?, state = ?,
 			current_version = ?, latest_version = ?, notify_cooldown_sec = ?, tags = ?, note = ?,
 			reference_monitor_id = ?, updated_at = ?
 			WHERE id = ?`,
-			m.Name, m.SourceType, storedConfig, nullString(m.VersionPrefix), nullString(m.VersionSuffix),
-			nullString(m.VersionIncludeRegex), nullString(m.VersionIgnoreRegex), nullString(m.FromPattern), nullString(m.ToPattern),
-			m.IntervalSec, boolInt(m.Enabled), string(m.State),
-			nullString(m.CurrentVersion), nullString(m.LatestVersion), m.NotifyCooldownSec, string(tagsJSON), nullString(m.Note),
-			m.ReferenceMonitorID, formatTime(time.Now()), m.ID)
-		if err != nil {
-			return err
-		}
-		return s.SetMonitorChannels(ctx, m.ID, m.ChannelIDs)
+		m.Name, m.SourceType, storedConfig, nullString(m.VersionPrefix), nullString(m.VersionSuffix),
+		nullString(m.VersionIncludeRegex), nullString(m.VersionIgnoreRegex), nullString(m.FromPattern), nullString(m.ToPattern),
+		m.IntervalSec, boolInt(m.Enabled), string(m.State),
+		nullString(m.CurrentVersion), nullString(m.LatestVersion), m.NotifyCooldownSec, string(tagsJSON), nullString(m.Note),
+		m.ReferenceMonitorID, formatTime(time.Now()), m.ID)
+	if err != nil {
+		return err
 	}
+	return s.SetMonitorChannels(ctx, m.ID, m.ChannelIDs)
+}
 
 func (s *sqliteStore) UpdateMonitorCompare(ctx context.Context, id int64, compareState, compareRefVersion string, compareSince *time.Time, compareNotifiedRef string) error {
 	_, err := s.db.exec(ctx, `UPDATE monitors SET
@@ -504,6 +656,13 @@ func (s *sqliteStore) SetMonitorChannels(ctx context.Context, monitorID int64, c
 		}
 	}
 	return tx.commit()
+}
+
+// SetMonitorOwner 用户删除转移资源用；管理员改归属也可用。
+func (s *sqliteStore) SetMonitorOwner(ctx context.Context, monitorID, ownerID int64) error {
+	_, err := s.db.exec(ctx, `UPDATE monitors SET owner_id = ?, updated_at = ? WHERE id = ?`,
+		ownerID, formatTime(time.Now()), monitorID)
+	return err
 }
 
 // ---------- 审计 ----------

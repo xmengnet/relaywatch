@@ -10,18 +10,23 @@ import (
 
 // ---------- 渠道 ----------
 
-const channelCols = `id, name, type, config, template, enabled, created_at, updated_at`
+const channelCols = `id, owner_id, name, type, config, template, enabled, created_at, updated_at`
 
 func (s *sqliteStore) channelFromRow(scan func(dest ...any) error) (*Channel, error) {
 	c := &Channel{}
 	var template sql.NullString
+	var ownerID sql.NullInt64
 	var enabled int
-	err := scan(&c.ID, &c.Name, &c.Type, &c.Config, &template, &enabled, &c.CreatedAt, &c.UpdatedAt)
+	err := scan(&c.ID, &ownerID, &c.Name, &c.Type, &c.Config, &template, &enabled, &c.CreatedAt, &c.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	if ownerID.Valid {
+		id := ownerID.Int64
+		c.OwnerID = &id
 	}
 	c.Template = template.String
 	c.Enabled = enabled != 0
@@ -32,9 +37,9 @@ func (s *sqliteStore) channelFromRow(scan func(dest ...any) error) (*Channel, er
 func (s *sqliteStore) CreateChannel(ctx context.Context, c *Channel) error {
 	now := time.Now()
 	storedConfig := s.encField(c.Config)
-	res, err := s.db.exec(ctx, `INSERT INTO channels (name, type, config, template, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		c.Name, c.Type, storedConfig, nullString(c.Template), boolInt(c.Enabled), formatTime(now), formatTime(now))
+	res, err := s.db.exec(ctx, `INSERT INTO channels (owner_id, name, type, config, template, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.OwnerID, c.Name, c.Type, storedConfig, nullString(c.Template), boolInt(c.Enabled), formatTime(now), formatTime(now))
 	if err != nil {
 		return fmt.Errorf("create channel: %w", err)
 	}
@@ -49,8 +54,18 @@ func (s *sqliteStore) GetChannel(ctx context.Context, id int64) (*Channel, error
 	})
 }
 
-func (s *sqliteStore) ListChannels(ctx context.Context) ([]*Channel, error) {
-	rows, err := s.db.query(ctx, `SELECT `+channelCols+` FROM channels ORDER BY id`)
+// ListChannelsVisible 用户可见渠道：自己的 + 全局共享（owner IS NULL）。
+func (s *sqliteStore) ListChannelsVisible(ctx context.Context, ownerID int64) ([]*Channel, error) {
+	return s.listChannelsWhere(ctx, `(owner_id = ? OR owner_id IS NULL)`, ownerID)
+}
+
+// ListChannelsAll 仅 admin：全部渠道。
+func (s *sqliteStore) ListChannelsAll(ctx context.Context) ([]*Channel, error) {
+	return s.listChannelsWhere(ctx, `1=1`)
+}
+
+func (s *sqliteStore) listChannelsWhere(ctx context.Context, where string, args ...any) ([]*Channel, error) {
+	rows, err := s.db.query(ctx, `SELECT `+channelCols+` FROM channels WHERE `+where+` ORDER BY id`, args...)
 	if err != nil {
 		return nil, err
 	}

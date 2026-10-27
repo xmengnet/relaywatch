@@ -152,7 +152,7 @@ func (s *OIDCService) Complete(ctx context.Context, providerName, state, code st
 		u = &store.User{
 			Username:     firstNonEmpty(claims.Name, claims.Email, claims.Sub),
 			Email:        claims.Email,
-			Role:         "viewer",
+			Role:         s.defaultOIDCRole(ctx), // 系统设置 oidc.default_role，默认 viewer
 			OIDCProvider: p.Name,
 			OIDCSubject:  claims.Sub,
 		}
@@ -169,6 +169,15 @@ func (s *OIDCService) Complete(ctx context.Context, providerName, state, code st
 		return nil, err
 	}
 	return u, nil
+}
+
+// defaultOIDCRole 读取 OIDC 首次登录自动建号的默认角色设置；非法或缺省回 viewer。
+func (s *OIDCService) defaultOIDCRole(ctx context.Context) string {
+	v, err := s.Store.GetSetting(ctx, "oidc.default_role")
+	if err == nil && (v == "user" || v == "viewer") {
+		return v
+	}
+	return "viewer"
 }
 
 // checkClaimRules 校验 email_domains / groups 白名单。规则为空 = 不限制。

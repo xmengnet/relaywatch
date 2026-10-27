@@ -15,6 +15,8 @@ const routes = [
       { path: 'channels', name: 'channels', component: () => import('@/views/ChannelListView.vue') },
       { path: 'notifications', name: 'notifications', component: () => import('@/views/NotificationListView.vue') },
       { path: 'import', name: 'import', component: () => import('@/views/ImportView.vue') },
+      { path: 'profile', name: 'profile', component: () => import('@/views/ProfileView.vue') },
+      { path: 'users', name: 'users', component: () => import('@/views/UserListView.vue'), meta: { admin: true } },
       { path: 'settings', name: 'settings', component: () => import('@/views/SettingsView.vue'), meta: { admin: true } },
     ],
   },

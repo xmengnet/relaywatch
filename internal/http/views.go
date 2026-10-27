@@ -8,10 +8,11 @@ import (
 
 // userResponse 是 API 输出的用户视图，绝不包含密码哈希等内部字段。
 type userResponse struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-	Email    string `json:"email,omitempty"`
-	Role     string `json:"role"`
+	ID          int64  `json:"id"`
+	Username    string `json:"username"`
+	Email       string `json:"email,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	Role        string `json:"role"`
 }
 
 func toUserResponse(u *store.User) *userResponse {
@@ -19,47 +20,89 @@ func toUserResponse(u *store.User) *userResponse {
 		return nil
 	}
 	return &userResponse{
-		ID:       u.ID,
-		Username: u.Username,
-		Email:    u.Email,
-		Role:     u.Role,
+		ID:          u.ID,
+		Username:    u.Username,
+		Email:       u.Email,
+		DisplayName: u.DisplayName,
+		Role:        u.Role,
 	}
+}
+
+// adminUserResponse 用户管理视图（admin 用），含来源/禁用/登录时间与资源计数。
+type adminUserResponse struct {
+	ID              int64    `json:"id"`
+	Username        string   `json:"username"`
+	Email           string   `json:"email,omitempty"`
+	DisplayName     string   `json:"display_name,omitempty"`
+	Role            string   `json:"role"`
+	Permissions     []string `json:"permissions"` // null = 未配置（按角色默认）
+	OIDCProvider    string   `json:"oidc_provider,omitempty"`
+	Disabled        bool     `json:"disabled"`
+	CreatedAt       string   `json:"created_at"`
+	LastLoginAt     *string  `json:"last_login_at,omitempty"`
+	MonitorCount    int64    `json:"monitor_count"`
+}
+
+func toAdminUserResponse(u *store.User, monitorCount int64) *adminUserResponse {
+	if u == nil {
+		return nil
+	}
+	r := &adminUserResponse{
+		ID:           u.ID,
+		Username:     u.Username,
+		Email:        u.Email,
+		DisplayName:  u.DisplayName,
+		Role:         u.Role,
+		Permissions:  u.Permissions, // nil 保留：前端显示"按角色默认"
+		OIDCProvider: u.OIDCProvider,
+		Disabled:     u.Disabled,
+		CreatedAt:    u.CreatedAt.Format(timeRFC3339),
+		MonitorCount: monitorCount,
+	}
+	if u.LastLoginAt != nil {
+		s := u.LastLoginAt.Format(timeRFC3339)
+		r.LastLoginAt = &s
+	}
+	return r
 }
 
 // monitorResponse 是 API 输出的监控视图。
 type monitorResponse struct {
-	ID                  int64    `json:"id"`
-	Name                string   `json:"name"`
+	ID                  int64           `json:"id"`
+	OwnerID             int64           `json:"owner_id,omitempty"`
+	OwnerName           string          `json:"owner_name,omitempty"` // 仅 admin 列表填充
+	Name                string          `json:"name"`
 	SourceType          string          `json:"source_type"`
 	SourceConfig        json.RawMessage `json:"source_config"`
-	VersionPrefix       string   `json:"version_prefix,omitempty"`
-	VersionSuffix       string   `json:"version_suffix,omitempty"`
-	VersionIncludeRegex string   `json:"version_include_regex,omitempty"`
-	VersionIgnoreRegex  string   `json:"version_ignore_regex,omitempty"`
-	FromPattern         string   `json:"from_pattern,omitempty"`
-	ToPattern           string   `json:"to_pattern,omitempty"`
-	IntervalSec         int      `json:"interval_sec"`
-	Enabled             bool     `json:"enabled"`
-	State               string   `json:"state"`
-	CurrentVersion      string   `json:"current_version,omitempty"`
-	LatestVersion       string   `json:"latest_version,omitempty"`
-	LastCheckedAt       *string  `json:"last_checked_at,omitempty"`
-	LastSuccessAt       *string  `json:"last_success_at,omitempty"`
-	LastChangeAt        *string  `json:"last_change_at,omitempty"`
-	LastError           string   `json:"last_error,omitempty"`
-	ConsecutiveFailures int      `json:"consecutive_failures"`
-	NotifyCooldownSec   int      `json:"notify_cooldown_sec"`
-	Tags                []string `json:"tags"`
-	Note                string   `json:"note,omitempty"`
-	ChannelIDs          []int64  `json:"channel_ids"`
-	CreatedAt           string   `json:"created_at"`
-	UpdatedAt           string   `json:"updated_at"`
+	VersionPrefix       string          `json:"version_prefix,omitempty"`
+	VersionSuffix       string          `json:"version_suffix,omitempty"`
+	VersionIncludeRegex string          `json:"version_include_regex,omitempty"`
+	VersionIgnoreRegex  string          `json:"version_ignore_regex,omitempty"`
+	FromPattern         string          `json:"from_pattern,omitempty"`
+	ToPattern           string          `json:"to_pattern,omitempty"`
+	IntervalSec         int             `json:"interval_sec"`
+	Enabled             bool            `json:"enabled"`
+	State               string          `json:"state"`
+	CurrentVersion      string          `json:"current_version,omitempty"`
+	LatestVersion       string          `json:"latest_version,omitempty"`
+	LastCheckedAt       *string         `json:"last_checked_at,omitempty"`
+	LastSuccessAt       *string         `json:"last_success_at,omitempty"`
+	LastChangeAt        *string         `json:"last_change_at,omitempty"`
+	LastError           string          `json:"last_error,omitempty"`
+	ConsecutiveFailures int             `json:"consecutive_failures"`
+	NotifyCooldownSec   int             `json:"notify_cooldown_sec"`
+	Tags                []string        `json:"tags"`
+	Note                string          `json:"note,omitempty"`
+	ChannelIDs          []int64         `json:"channel_ids"`
+	CreatedAt           string          `json:"created_at"`
+	UpdatedAt           string          `json:"updated_at"`
 
 	// 双轨对比（M6）
-	ReferenceMonitorID *int64  `json:"reference_monitor_id,omitempty"`
-	CompareState       string  `json:"compare_state,omitempty"`
-	CompareRefVersion  string  `json:"compare_ref_version,omitempty"`
-	CompareSince       *string `json:"compare_since,omitempty"`
+	ReferenceMonitorID   *int64  `json:"reference_monitor_id,omitempty"`
+	ReferenceMonitorName string  `json:"reference_monitor_name,omitempty"`
+	CompareState         string  `json:"compare_state,omitempty"`
+	CompareRefVersion    string  `json:"compare_ref_version,omitempty"`
+	CompareSince         *string `json:"compare_since,omitempty"`
 }
 
 func toMonitorResponse(m *store.Monitor) *monitorResponse {
@@ -73,6 +116,7 @@ func toMonitorResponse(m *store.Monitor) *monitorResponse {
 	}
 	r := &monitorResponse{
 		ID:                  m.ID,
+		OwnerID:             m.OwnerID,
 		Name:                m.Name,
 		SourceType:          m.SourceType,
 		VersionPrefix:       m.VersionPrefix,
@@ -129,11 +173,11 @@ func toMonitorResponse(m *store.Monitor) *monitorResponse {
 
 // tokenResponse 是 API 输出的 Token 视图，不暴露哈希。
 type tokenResponse struct {
-	ID         int64    `json:"id"`
-	Name       string   `json:"name"`
-	CreatedAt  string   `json:"created_at"`
-	ExpiresAt  *string  `json:"expires_at,omitempty"`
-	LastUsedAt *string  `json:"last_used_at,omitempty"`
+	ID         int64   `json:"id"`
+	Name       string  `json:"name"`
+	CreatedAt  string  `json:"created_at"`
+	ExpiresAt  *string `json:"expires_at,omitempty"`
+	LastUsedAt *string `json:"last_used_at,omitempty"`
 }
 
 func toTokenResponse(t *store.APIToken) *tokenResponse {
@@ -158,13 +202,13 @@ func toTokenResponse(t *store.APIToken) *tokenResponse {
 
 // checkHistoryResponse 是检查历史的 API 视图。
 type checkHistoryResponse struct {
-	ID         int64   `json:"id"`
-	MonitorID  int64   `json:"monitor_id"`
-	CheckedAt  string  `json:"checked_at"`
-	DurationMS int64   `json:"duration_ms"`
-	OK         bool    `json:"ok"`
-	Version    string  `json:"version,omitempty"`
-	Error      string  `json:"error,omitempty"`
+	ID         int64  `json:"id"`
+	MonitorID  int64  `json:"monitor_id"`
+	CheckedAt  string `json:"checked_at"`
+	DurationMS int64  `json:"duration_ms"`
+	OK         bool   `json:"ok"`
+	Version    string `json:"version,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 func toCheckHistoryResponse(h *store.CheckHistory) *checkHistoryResponse {
@@ -207,6 +251,7 @@ func toVersionChangeResponse(c *store.VersionChange) *versionChangeResponse {
 // channelResponse 是渠道的 API 视图（config 原样返回；M4 加密后需掩码）。
 type channelResponse struct {
 	ID        int64  `json:"id"`
+	OwnerID   *int64 `json:"owner_id,omitempty"` // nil = 全局共享
 	Name      string `json:"name"`
 	Type      string `json:"type"`
 	Config    string `json:"config"`
@@ -222,6 +267,7 @@ func toChannelResponse(c *store.Channel) *channelResponse {
 	}
 	return &channelResponse{
 		ID:        c.ID,
+		OwnerID:   c.OwnerID,
 		Name:      c.Name,
 		Type:      c.Type,
 		Config:    c.Config,
@@ -236,7 +282,10 @@ func toChannelResponse(c *store.Channel) *channelResponse {
 type deliveryResponse struct {
 	ID            int64   `json:"id"`
 	MonitorID     int64   `json:"monitor_id"`
+	MonitorName   string  `json:"monitor_name,omitempty"`
 	ChannelID     int64   `json:"channel_id"`
+	ChannelName   string  `json:"channel_name,omitempty"`
+	Kind          string  `json:"kind"`
 	ChangeID      *int64  `json:"change_id,omitempty"`
 	Payload       string  `json:"payload,omitempty"`
 	Status        string  `json:"status"`
@@ -251,10 +300,15 @@ func toDeliveryResponse(d *store.Delivery) *deliveryResponse {
 	if d == nil {
 		return nil
 	}
+	kind := d.Kind
+	if kind == "" {
+		kind = "update"
+	}
 	r := &deliveryResponse{
 		ID:        d.ID,
 		MonitorID: d.MonitorID,
 		ChannelID: d.ChannelID,
+		Kind:      kind,
 		ChangeID:  d.ChangeID,
 		Payload:   d.Payload,
 		Status:    string(d.Status),

@@ -40,11 +40,22 @@ type Store interface {
 	UserCount(ctx context.Context) (int64, error)
 	UpdateUserPassword(ctx context.Context, id int64, hash []byte) error
 	UpdateUserLogin(ctx context.Context, id int64, at time.Time) error
+	// 用户管理（M8）
+	ListUsers(ctx context.Context, f UserFilter) ([]*User, int, error)
+	UpdateUserProfile(ctx context.Context, u *User) error // email / display_name / role / password_hash（nil 不改）
+	SetUserDisabled(ctx context.Context, id int64, disabled bool) error
+	HasEnabledAdmin(ctx context.Context) (int64, error)
+	DeleteUserTransferResources(ctx context.Context, userID, toUserID int64) error
+	CountMonitorsByOwner(ctx context.Context, ownerID int64) (int64, error)
 
 	// 会话
 	CreateSession(ctx context.Context, s *Session) error
 	SessionByID(ctx context.Context, id string) (*Session, error)
 	RevokeSession(ctx context.Context, id string) error
+	// RevokeUserSessions 吊销某用户全部未过期会话（禁用/重置密码用），返回吊销数。
+	RevokeUserSessions(ctx context.Context, userID int64) (int64, error)
+	// ListSessionsByUser 用户全部未吊销且未过期的会话（按创建时间倒序，profile 会话管理用）。
+	ListSessionsByUser(ctx context.Context, userID int64) ([]*Session, error)
 	DeleteExpiredSessions(ctx context.Context) (int64, error)
 
 	// API Token
@@ -62,6 +73,7 @@ type Store interface {
 	UpdateMonitor(ctx context.Context, m *Monitor) error
 	DeleteMonitor(ctx context.Context, id int64) error
 	SetMonitorChannels(ctx context.Context, monitorID int64, channelIDs []int64) error
+	SetMonitorOwner(ctx context.Context, monitorID, ownerID int64) error
 
 	// 检查历史
 	AddCheckHistory(ctx context.Context, h *CheckHistory) error
@@ -83,7 +95,10 @@ type Store interface {
 	// 渠道
 	CreateChannel(ctx context.Context, c *Channel) error
 	GetChannel(ctx context.Context, id int64) (*Channel, error)
-	ListChannels(ctx context.Context) ([]*Channel, error)
+	// ListChannelsVisible 返回用户可见渠道：自己的 + 全局共享（ownerID=0 即全局）。
+	ListChannelsVisible(ctx context.Context, ownerID int64) ([]*Channel, error)
+	// ListChannelsAll 仅 admin：全部渠道。
+	ListChannelsAll(ctx context.Context) ([]*Channel, error)
 	UpdateChannel(ctx context.Context, c *Channel) error
 	DeleteChannel(ctx context.Context, id int64) error
 	ChannelUsageCount(ctx context.Context, channelID int64) (int, error)

@@ -78,8 +78,14 @@ func TestEvaluator(t *testing.T) {
 	ctx := context.Background()
 	_ = st.Migrate(ctx)
 
+	admin := &store.User{Username: "admin", Role: "admin"}
+	if err := st.CreateUser(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+
 	// 1. 创建上游参照监控（GitHub）
 	ref := &store.Monitor{
+		OwnerID:       admin.ID,
 		Name:          "upstream-repo",
 		SourceType:    "github_release",
 		SourceConfig:  `{"repo":"owner/repo"}`,
@@ -95,6 +101,7 @@ func TestEvaluator(t *testing.T) {
 	// 2. 创建跟随监控（AUR），初始版本为 1.1.0-1
 	refID := ref.ID
 	follower := &store.Monitor{
+		OwnerID:            admin.ID,
 		Name:               "aur-pkg",
 		SourceType:         "aur",
 		SourceConfig:       `{"pkgname":"aur-pkg"}`,

@@ -26,6 +26,8 @@ v0.4.0 → v0.5.0（M7 nvchecker 全面兼容与扩展源设计增补）：
 - 提炼 nvchecker 源码成熟避坑实践：涵盖 OCI V2 认证探针、GitHub 限流重试与 GraphQL 查询、Maven XML 坐标定位、Yanked/Prerelease 过滤；
 - 确立 Web 多用户环境下的安全与跨平台规范：对 `cmd` 实行严格的配置禁用与管理员准入，对本地 `pacman`/`alpm` 数据库通过官方 REST API 进行透明代换。
 
+v0.5.0 增补（2026-10-27 品牌资产落地）：Logo 由旧雷达扫描稿（蓝色渐变底托）整体替换为「接力彗星」方案——实心点 + 拖尾弧线交接向空心环，信号橙 `#FF6B2C` on 墨黑 `#131316`；favicon 改 SVG 优先（内嵌 `prefers-color-scheme` 适配深浅标签栏），PNG 保留为回退。资产清单与规范见 §8.15。
+
 ## 1. 技术选型
 
 | 维度 | 选择 | 理由 |
@@ -171,7 +173,7 @@ CREATE TABLE users (
     username      TEXT    NOT NULL UNIQUE,
     email         TEXT,
     password_hash TEXT,              -- OIDC 用户为 NULL
-    role          TEXT    NOT NULL DEFAULT 'viewer',  -- admin | viewer
+    role          TEXT    NOT NULL DEFAULT 'viewer',  -- admin | user | viewer（M8 扩展，见 §19.3）
     oidc_provider TEXT,              -- 来自哪个 IdP
     oidc_subject  TEXT,              -- IdP 的 sub
     totp_secret   TEXT,              -- 预留
@@ -337,7 +339,7 @@ CREATE TABLE settings (
 );
 ```
 
-上表为 M1–M5 已实现的结构；M6 双轨对比的增量列（`monitors.reference_monitor_id`、`compare_*`，`deliveries.kind`/`context`）见 §17.1。
+上表为 M1–M5 已实现的结构；M6 双轨对比的增量列（`monitors.reference_monitor_id`、`compare_*`，`deliveries.kind`/`context`）见 §17.1；M8 多用户增量（`monitors.owner_id`、`channels.owner_id`、`users.display_name`、角色值域扩展）见 §19.4。
 
 ### 3.2 设计要点
 
@@ -629,7 +631,9 @@ hash, _ := bcrypt.GenerateFromPassword([]byte(pw), 12)
 err := bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(pw))
 ```
 
-首次启动检测 `users` 表为空，引导创建管理员。引导页面仅在无用户时可用，创建后立即失效。
+首次启动检测 `users` 表为空，引导创建管理员。引导页面仅在无用户时可用，创建后立即生效失效。
+
+自助注册（M8）：`registration.enabled` 默认关闭，开启后 `POST /api/v1/auth/register` 开放，初始角色取 `registration.default_role`；登录页动态显示注册入口。完整注册与账户生命周期设计见 §19.5。
 
 ### 6.2 OIDC 流程
 
@@ -762,7 +766,16 @@ err := bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(pw))
 | GET | `/api/v1/stats` | 仪表盘计数 |
 | GET | `/api/v1/auth/providers` | 启用的 OIDC Provider（公开，供登录页渲染按钮） |
 | GET | `/api/v1/auth/csrf` | 取当前会话 CSRF token |
-| GET | `/api/v1/events` | SSE，推送检查/投递事件 |
+| POST | `/api/v1/auth/register` | 自助注册（M8，仅 `registration.enabled` 时开放，见 §19.5） |
+| GET/PATCH | `/api/v1/profile` | 我的资料（M8，见 §19.5） |
+| POST | `/api/v1/profile/password` | 修改密码（M8） |
+| GET/DELETE | `/api/v1/profile/sessions` | 我的会话管理与踢出（M8） |
+| GET | `/api/v1/users` | 用户列表（M8，admin） |
+| POST | `/api/v1/users` | 手工建号（M8，admin） |
+| PATCH | `/api/v1/users/{id}` | 改角色/邮箱/重置密码（M8，admin） |
+| POST | `/api/v1/users/{id}/disable` | 禁用/启用（M8，admin） |
+| DELETE | `/api/v1/users/{id}` | 删除用户并转移资源（M8，admin） |
+| GET | `/api/v1/events` | SSE，推送检查/投递事件（M8：按用户归属过滤，见 §19.7） |
 | GET | `/healthz` | 健康检查（无需认证） |
 | GET | `/metrics` | Prometheus 指标（可选） |
 
@@ -1873,6 +1886,28 @@ Vuetify 组件自带大部分可访问性支持（键盘导航、ARIA、焦点�
 - 状态不只靠颜色区分，`StatusChip` 带图标和文字
 - 尊重 `prefers-reduced-motion`（Vuetify 有 `$vuetify.noTransitions` 配置）
 
+### 8.15 品牌资产
+
+Logo 采用「接力彗星」图形（方案 E）：实心圆点是当前版本，拖尾弧线把它交接向空心环——「Relay（交接）」的直译。设计基调：去容器化（无底托渐变方块）、纯色无渐变、单一高饱和信号色。
+
+| 资产 | 路径 | 说明 |
+|---|---|---|
+| 主 Logo | `web/src/assets/logo.svg` | 墨黑 `#131316` 圆角底托 + 信号橙 `#FF6B2C` 图形，侧边栏与顶栏以 `<img>` 引用（保留 4px 圆角 class） |
+| favicon（主） | `web/public/favicon.svg` | 笔画加粗版；内嵌 `prefers-color-scheme` 媒体查询，浅色标签栏显示墨黑底托，深色标签栏显示裸图形 |
+| favicon（回退） | `web/public/favicon.png` | 32×32 PNG，由 SVG 导出，供不支持 SVG favicon 的浏览器 |
+| Apple Touch Icon | `web/public/apple-touch-icon.png` | 180×180 PNG，带底托主 Logo |
+
+引用方式（`web/index.html`）：
+
+```html
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="alternate icon" type="image/png" href="/favicon.png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<meta name="theme-color" content="#131316" />
+```
+
+**规范**：信号橙 `#FF6B2C` 是品牌专用色，不代表产品状态（`has_update` 仍用主题 `warning` 琥珀色），两者不混用；PNG 资产由 SVG 以 `-density 512` 导出（ImageMagick），修改 SVG 后需重新导出。
+
 ## 9. 安全设计
 
 | 威胁 | 对策 |
@@ -2603,4 +2638,211 @@ nvchecker 的强大不仅在于源多，还在于其高度统一的版本提取�
 | `ignored` | `version_ignored` | 空格分隔列表映射 |
 | `include_regex` / `exclude_regex` | `version_include_regex` / `version_ignore_regex` | 直接映射 |
 | `prefix` | `version_prefix` | 直接映射 |
+
+## 19. 多用户与用户管理设计（M8 规划）
+
+### 19.1 背景与目标
+
+当前系统为单租户模型：已有 `users` 表与完整认证体系（本地 bcrypt + 多 OIDC + API Token + 会话/CSRF），但业务资源不属于任何用户——`monitors`、`channels` 均无归属字段，任何登录用户看到全局同一份数据；角色只有 `admin | viewer` 两级，viewer 只读。
+
+M8 目标：在不破坏现有单用户部署体验的前提下，引入**资源归属（ownership）+ 完整用户管理**：
+
+- 普通用户管理自己的监控与渠道，互不可见
+- admin 拥有全局视角，可管理所有资源与所有用户
+- admin 可控制是否开放自助注册，并配置注册默认角色
+- 用户资料（邮箱、密码、显示名）自助维护；管理员侧提供用户增删改、禁用、角色调整
+
+### 19.2 协作模型（已决策：方案 B「归属 + admin 全局可见」)
+
+| 模型 | 行为 | 结论 |
+|---|---|---|
+| A. 完全隔离 | 每个用户只看到自己的资源 | 不采纳：admin 失去全局视角 |
+| **B. 归属 + admin 全局可见** | 普通用户管理自己的资源；admin 能看、能管理所有人的 | **采纳** |
+| C. 团队/工作空间 | org / member / 逐条 ACL | 不采纳：对自托管工具过重，成本数量级级 |
+
+B 方案是现有 `admin|viewer` 角色体系的最小延伸：自托管小团队最常见形态是「个人部署开放给朋友/同事用」，各管各的监控、admin 兜底。
+
+### 19.3 角色体系
+
+`users.role` 由 `admin | viewer` 扩展为三级：
+
+| 角色 | 语义 | 资源权限 | 管理权限 |
+|---|---|---|---|
+| `admin` | 管理员 | 全部用户的资源可读可写 | 用户管理、系统设置、OIDC Provider、注册开关 |
+| `user` | 普通用户 | 自己的资源可读写；全局共享渠道只读引用 | 仅自己的资料与 Token |
+| `viewer` | 只读用户 | 自己的资源可读（含投递/历史），不可增删改 | 仅自己的资料与 Token |
+
+要点：
+
+- 旧数据兼容：存量 `admin` 不变；OIDC 自动建号默认角色由系统设置 `oidc_default_role` 控制（默认 `viewer`，可配为 `user`）
+- viewer 保留「自己名下」语义：viewer 登录后看到自己被分配的资源（如管理员代建后交接），但所有写操作被拒绝——避免 viewer 看到空列表而困惑
+- `RequireAdmin` 中间件语义不变；新增 `requireResourceAccess` 见 §19.6
+
+### 19.4 数据模型变更
+
+```sql
+-- 角色扩展（值域 admin | user | viewer，无 schema 变更，仅值域）
+-- monitors / channels 增加归属
+ALTER TABLE monitors ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 0 REFERENCES users(id);
+ALTER TABLE channels ADD COLUMN owner_id INTEGER REFERENCES users(id);  -- NULL = 全局共享渠道
+CREATE INDEX idx_monitors_owner ON monitors(owner_id);
+CREATE INDEX idx_channels_owner ON channels(owner_id);
+
+-- 用户资料扩展
+ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
+
+-- 注册开关与默认角色走 settings 表（key-value），无需 schema 变更：
+--   registration.enabled      : "true" | "false"（默认 false）
+--   registration.default_role: "user" | "viewer"（默认 user）
+--   oidc.default_role        : "viewer" | "user"（默认 viewer）
+```
+
+迁移策略（一次性 SQL，纳入现有 `Migrate` 版本序列）：
+
+```sql
+UPDATE monitors SET owner_id = (SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1)
+  WHERE owner_id = 0;
+```
+
+存量单用户部署升级后，全部资源自动归到首个 admin 名下，体验无缝；`channels.owner_id` 为 NULL 表示全局共享渠道（admin 可建、所有用户可引用，不可引用者不可见）。
+
+归属设计原则：
+
+- **衍生表不加 owner**：`check_history`、`version_changes`、`deliveries` 一律通过 monitor 间接归属，避免冗余与双写不一致
+- **`oidc_providers`、`settings` 保持全局**：本来就是系统级配置
+- **API Token 天然归属用户**：现有 `api_tokens.user_id` 不变，Token 权限 = 所属用户权限 ∩ 资源归属校验
+
+### 19.5 注册与账户生命周期
+
+#### 注册开关（admin 系统设置项）
+
+| 设置 | 默认 | 说明 |
+|---|---|---|
+| `registration.enabled` | `false` | 关闭时 `/register` 返回 404，登录页不显示注册入口 |
+| `registration.default_role` | `user` | 自助注册用户的初始角色（user 或 viewer） |
+| `registration.require_email` | `false` | 注册是否必填邮箱（无邮箱验证流程，见 §19.10 明确不做） |
+| `oidc.default_role` | `viewer` | OIDC 首次登录自动建号的默认角色 |
+
+注册流程复用现有本地账户体系：
+
+- `POST /api/v1/auth/register`（无需登录）：用户名 + 密码（+可选邮箱），bcrypt 落库，角色取 `registration.default_role`
+- 复用登录接口的限流（每 IP 每分钟 5 次）与用户名占用校验
+- 注册成功即自动登录（建会话）；`registration.enabled=false` 时该端点 404 且审计不记（避免探测）
+- 系统告警渠道：注册发生时向 admin 告警渠道投递一条通知（复用现有 alert 渠道机制），可及时发现滥用
+
+#### 用户自助维护（所有角色可用）
+
+| 能力 | 接口 | 说明 |
+|---|---|---|
+| 查看资料 | `GET /api/v1/profile` | 用户名、邮箱、显示名、角色、OIDC 绑定情况 |
+| 改资料 | `PATCH /api/v1/profile` | 邮箱、显示名（用户名不可改——它关联审计与 Token 归属） |
+| 改密码 | `POST /api/v1/profile/password` | 需验证旧密码；OIDC-only 账户（无 password_hash）不可设 |
+| 会话管理 | `GET /api/v1/profile/sessions` + `DELETE /{id}` | 查看自己的登录会话（UA/IP/时间），可踢掉单个；改密码后吊销其他所有会话 |
+| API Token | 现有 `/api/v1/tokens` 不变 | 已归属用户 |
+
+#### 管理员用户管理（admin 专属）
+
+新增 `handlers_users.go`，挂在 `RequireAdmin` 下：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/users` | 用户列表（用户名、邮箱、角色、来源、禁用态、最后登录、资源计数），支持 `?q=&role=&page=` |
+| POST | `/api/v1/users` | 手工建号（用户名 + 初始密码 + 角色 + 邮箱） |
+| PATCH | `/api/v1/users/{id}` | 改角色 / 邮箱 / 显示名 / 重置密码（admin 不收旧密码） |
+| POST | `/api/v1/users/{id}/disable` | 禁用/启用；禁用即联动 `RevokeSession` 吊销全部会话，API Token 校验时同步拒绝 |
+| DELETE | `/api/v1/users/{id}` | 删除用户；资源转移而非删除（见下） |
+| GET | `/api/v1/users/{id}/sessions` | 查看某用户全部会话，admin 可逐个吊销 |
+
+自保护约束：
+
+- 不可删除或禁用**最后一个可用 admin**；不可修改自己的角色（防误操作自锁）
+- 删除用户时其名下 `monitors` 转移给操作 admin（连带衍生记录），`channels` 归属 NULL 化为共享或一并转移（选转移，保持语义简单）；sessions/api_tokens 级联删除
+- 用户管理全部操作写审计日志（`user.create / user.disable / user.role_change / user.password_reset / user.delete`）
+
+### 19.6 资源隔离与权限穿透
+
+#### 权限矩阵
+
+| 资源 | viewer | user | admin |
+|---|---|---|---|
+| 看自己的监控/渠道/历史/投递 | ✅ | ✅ | ✅（含所有人的） |
+| 增删改自己的资源 | ❌ | ✅ | ✅ |
+| 看别人的资源 | ❌ | ❌ | ✅ |
+| 全局共享渠道（owner NULL） | 只读引用 | 只读引用 | 增删改 |
+| OIDC Provider / 系统设置 / 用户管理 | ❌ | ❌ | ✅ |
+
+#### Store 层
+
+- `MonitorFilter` 增加 `OwnerID int64`（0 = 不过滤，仅 admin 传入）
+- 按 monitor 入口的查询增加 owner 过滤：`ListMonitors` / `GetMonitor` / `UpdateMonitor` / `DeleteMonitor` / `ListCheckHistory` / `ListVersionChanges` / `ListDeliveries` 等
+- `ListChannels(ctx, ownerID)` 改签名：返回自己的 + 全局共享的；admin 传 -1 看全部
+- `ListEnabledMonitors` 保持全局（调度器检查所有资源，与用户无关）
+
+#### HTTP 层
+
+- 新增统一 helper `requireMonitorAccess(r, id) (*Monitor, error)` / `requireChannelAccess`：admin 直通；否则校验 `owner == user.ID`，失败返回 **404 而非 403**（避免资源枚举）
+- 所有 `/api/v1/monitors/{id}/*` 与 `/api/v1/channels/{id}/*` 入口套用；创建时服务端强制 `OwnerID = user.ID`（不接受请求体传入），admin 建渠道时可选「共享」
+- 批量操作 `/monitors/batch` 先做归属过滤，非本人资源静默跳过（不整体失败）
+
+#### 双轨对比约束
+
+跟随监控（follower）只能引用**同 owner** 的参照监控，创建绑定时校验；参照被转授/删除时沿用现有 `ClearFollowerReferences` 清理。
+
+### 19.7 SSE 与通知的归属过滤
+
+- `EventBroker` 订阅者记录 `userID` 与 `isAdmin`；`Broadcast(event, payload, ownerID)` 按订阅者过滤分发：admin 收全量，普通用户只收自己资源的事件
+- 事件 payload 统一携带 `monitor_id` / `channel_id`，订阅端按 owner 判定（broker 内部维护 ID→owner 缓存，monitor 变更事件顺带刷新）
+- 通知投递不感知用户：渠道随 monitor 绑定走，投递队列无需变更
+
+### 19.8 导入导出与前端增量
+
+**导入导出**：
+
+- nvchecker 导入：资源归当前登录用户
+- JSON 导出：默认按当前用户视角导出；admin 加 `?all=1` 导出全部；导出格式增加 `owner` 字段（用户名），导入时由 admin 映射、普通用户忽略并归自己
+
+**前端**：
+
+- 常规页面基本无感（API 返回已按用户过滤），存量单用户升级后界面不变
+- 新增「用户管理」页（admin）：用户表格（角色 chip、来源图标、禁用态）、新建/编辑对话框、禁用确认（提示会话即时失效）、删除确认（提示资源转移目标）
+- 监控/渠道列表：admin 可见「所有者」列与「按用户筛选」；渠道编辑对话框 admin 多「共享给所有用户」开关
+- 新增「个人资料」页：资料编辑、改密码、会话管理（踢会话）；登录页按 `registration.enabled` 动态显示注册入口；导航栏显示用户菜单（资料 / 管理 / 退出）
+- i18n：zh-Hans / en 同步新增文案
+
+### 19.9 测试策略
+
+| 层次 | 方式 |
+|---|---|
+| 迁移 | 空 users / 多 admin / 零监控升级矩阵，存量归首 admin |
+| Store | owner 过滤矩阵（admin 0 参数 / user / 无权限查询为空）；共享渠道可见性 |
+| HTTP | 404 而非 403 断言；跨用户访问拒绝；批量操作跳过他人资源；注册开关 on/off 行为 |
+| 用户管理 | 最后 admin 自锁防护；禁用后会话/Token 即时失效；删除转移资源完整性 |
+| SSE | 双用户订阅互不收到对方事件；admin 收全量 |
+
+### 19.10 明确不做
+
+- 邮箱验证 / 找回密码邮件流（自托管场景收益低；忘记密码由 admin 重置覆盖）
+- 组织 / 团队 / 逐条 ACL（若未来需要，owner_id 可平滑升级为 team_id）
+- 注册审批流（邀请码机制）（开关足够，需要更强控制时用 admin 手工建号）
+- 用户自助删除账户（数据转移语义复杂，由 admin 处理）
+
+### 19.11 细粒度操作权限（M8.1 增量）
+
+在三级角色之上提供用户级权限覆盖，admin 可在用户管理里逐项勾选某用户允许的操作：
+
+| 权限项 | 说明 |
+|---|---|
+| `monitor.create` | 创建监控 |
+| `channel.create` | 创建渠道 |
+| `import` | nvchecker keyfile 导入 |
+| `export` | 配置导出 |
+
+语义：
+
+- `users.permissions` 存 JSON 数组（迁移 0007）；**NULL = 未配置，按角色默认**（user 全量 / viewer 只读），**`[]` = 显式全禁**
+- `User.Can(perm)`：admin 恒真；显式配置优先；nil 回退角色默认
+- 校验点：创建监控（POST /monitors）、创建渠道（POST /channels）、导入（preview+import）、导出（export），权限不足统一 **403**（与资源不存在 404 语义区分）
+- 角色变更时若未显式传 permissions，权限重置为新角色默认（防 viewer 保留建监控权限）
+- 用户管理 API 的 create/patch 接受 `permissions`；adminUserResponse 返回（null 表示按角色默认，前端提示）
+- 明确不做：自定义任意权限项（新需求时在 AllPermissions 常量扩展）、按资源（单条监控）级 ACL
 

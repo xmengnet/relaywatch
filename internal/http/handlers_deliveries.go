@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -36,11 +37,61 @@ func (h *DeliveryHandler) list(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
+	// 归属过滤：普通用户只看自己监控相关的投递（衍生表无 owner，经 monitor 间接判定）
+	u := authUser(r)
+	if !isAdmin(u) {
+		owned := make([]*store.Delivery, 0, len(items))
+		for _, d := range items {
+			if m, err := h.St.GetMonitor(r.Context(), d.MonitorID); err == nil && m.OwnerID == u.ID {
+				owned = append(owned, d)
+			}
+		}
+		items = owned
+		total = len(items)
+	}
+	// 补充监控/渠道名称，避免前端只能显示裸 ID
+	monitorNames := map[int64]string{}
+	channelNames := map[int64]string{}
 	out := make([]*deliveryResponse, 0, len(items))
 	for _, d := range items {
-		out = append(out, toDeliveryResponse(d))
+		resp := toDeliveryResponse(d)
+		if _, ok := monitorNames[d.MonitorID]; !ok {
+			monitorNames[d.MonitorID] = lookupName(h.St, r.Context(), d.MonitorID, false)
+		}
+		if _, ok := channelNames[d.ChannelID]; !ok {
+			channelNames[d.ChannelID] = lookupName(h.St, r.Context(), d.ChannelID, true)
+		}
+		resp.MonitorName = monitorNames[d.MonitorID]
+		resp.ChannelName = channelNames[d.ChannelID]
+		out = append(out, resp)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out, "total": total})
+}
+
+// lookupName 按需查名称；监控 deleted 时返回 "#id"，渠道同样降级。
+func lookupName(st store.Store, ctx context.Context, id int64, isChannel bool) string {
+	if id <= 0 {
+		return ""
+	}
+	var name string
+	var err error
+	if isChannel {
+		ch, e := st.GetChannel(ctx, id)
+		err = e
+		if ch != nil {
+			name = ch.Name
+		}
+	} else {
+		m, e := st.GetMonitor(ctx, id)
+		err = e
+		if m != nil {
+			name = m.Name
+		}
+	}
+	if err != nil || name == "" {
+		return fmt.Sprintf("#%d", id)
+	}
+	return name
 }
 
 // resend 手动重发：作废该变更其余待投递记录（需求 3.3），再立即投一条。
@@ -56,6 +107,11 @@ func (h *DeliveryHandler) resend(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeInternalError(w, err)
+		return
+	}
+	// 重发作用于监控，按监控归属判定
+	if m, err := h.St.GetMonitor(r.Context(), d.MonitorID); err != nil || !canAccessMonitor(authUser(r), m) {
+		writeError(w, http.StatusNotFound, "投递记录不存在")
 		return
 	}
 	if d.Status == store.DeliveryPending || d.Status == store.DeliveryDeferred {

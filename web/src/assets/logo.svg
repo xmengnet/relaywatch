@@ -1,0 +1,10 @@
+<svg width="512" height="512" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <!-- RelayWatch 品牌标 · 方案 E「接力彗星」
+       实心点是当前版本，拖尾弧线把它交接向空心环（下一个版本）。
+       信号橙 #FF6B2C on 墨黑 #131316，圆角底托。 -->
+  <rect width="64" height="64" rx="14" fill="#131316"/>
+  <path d="M14 50 C14 30 30 16 48 16" fill="none" stroke="#FF6B2C" stroke-width="6.5" stroke-linecap="round"/>
+  <path d="M22 52 C24 40 32 32 42 28" fill="none" stroke="#FF6B2C" stroke-opacity="0.45" stroke-width="6.5" stroke-linecap="round"/>
+  <circle cx="14" cy="50" r="8" fill="#FF6B2C"/>
+  <circle cx="49" cy="15" r="8.5" fill="none" stroke="#FF6B2C" stroke-width="5"/>
+</svg>

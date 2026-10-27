@@ -5,6 +5,7 @@ import { useDisplay } from 'vuetify'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from 'vue-i18n'
 import { useTheme } from '@/composables/useTheme'
+import logoUrl from '@/assets/logo.svg'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,14 +16,21 @@ const { mode } = useTheme()
 
 const drawer = ref(mdAndUp.value)
 
-const navItems = computed(() => [
-  { to: '/', icon: 'mdi-view-dashboard-outline', title: t('nav.dashboard') },
-  { to: '/monitors', icon: 'mdi-radar', title: t('nav.monitors') },
-  { to: '/import', icon: 'mdi-import', title: '导入' },
-  { to: '/channels', icon: 'mdi-bell-ring-outline', title: t('nav.channels') },
-  { to: '/notifications', icon: 'mdi-email-outline', title: t('nav.notifications') },
-  { to: '/settings', icon: 'mdi-cog-outline', title: t('nav.settings') },
-])
+const navItems = computed(() => {
+  const items = [
+    { to: '/', icon: 'mdi-view-dashboard-outline', title: t('nav.dashboard') },
+    { to: '/monitors', icon: 'mdi-radar', title: t('nav.monitors') },
+    { to: '/import', icon: 'mdi-import', title: '导入' },
+    { to: '/channels', icon: 'mdi-bell-ring-outline', title: t('nav.channels') },
+    { to: '/notifications', icon: 'mdi-email-outline', title: t('nav.notifications') },
+    { to: '/profile', icon: 'mdi-account-circle-outline', title: '个人资料' },
+  ]
+  if (auth.user?.role === 'admin') {
+    items.push({ to: '/users', icon: 'mdi-account-group-outline', title: '用户管理' })
+    items.push({ to: '/settings', icon: 'mdi-cog-outline', title: t('nav.settings') })
+  }
+  return items
+})
 
 const themeStates = [
   { value: 'light', icon: 'mdi-white-balance-sunny', label: '浅色' },
@@ -48,16 +56,20 @@ async function doLogout() {
 <template>
   <v-app>
     <v-navigation-drawer v-model="drawer" :permanent="mdAndUp" :temporary="!mdAndUp" width="240">
+      <template #prepend>
+        <div class="d-flex align-center pa-4 pb-2">
+          <img :src="logoUrl" alt="RelayWatch logo" width="28" height="28" class="rounded me-2" />
+          <span class="text-subtitle-1 font-weight-bold">RelayWatch</span>
+        </div>
+      </template>
       <v-list nav density="comfortable">
         <v-list-item v-for="item in navItems" :key="item.to" :to="item.to" :prepend-icon="item.icon" :title="item.title" />
       </v-list>
-      <template #append>
-        <div class="pa-4 text-caption text-medium-emphasis">RelayWatch</div>
-      </template>
     </v-navigation-drawer>
 
     <v-app-bar flat border="b">
       <v-app-bar-nav-icon v-if="!mdAndUp" @click="drawer = !drawer" aria-label="菜单" />
+      <img :src="logoUrl" alt="RelayWatch logo" width="26" height="26" class="rounded ms-4 me-2" />
       <v-app-bar-title>RelayWatch</v-app-bar-title>
       <template #append>
         <v-btn :icon="themeIcon" variant="text" :aria-label="`主题：${themeLabel}`" :title="`主题：${themeLabel}`" @click="toggleTheme" />

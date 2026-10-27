@@ -17,9 +17,23 @@ type ImportExportHandler struct {
 }
 
 func (h *ImportExportHandler) routes(r chiRouterIface) {
-	r.Post("/import/preview", h.preview)
-	r.Post("/import", h.doImport)
-	r.Get("/export", h.exportAll)
+	r.Post("/import/preview", h.requirePerm(h.preview, store.PermImport))
+	r.Post("/import", h.requirePerm(h.doImport, store.PermImport))
+	r.Get("/export", h.requirePerm(h.exportAll, store.PermExport))
+}
+
+// requirePerm 细粒度权限包装：无权限 403。
+func (h *ImportExportHandler) requirePerm(next http.HandlerFunc, perm string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !authUser(r).Can(perm) {
+			forbidPermission(w, map[string]string{
+				store.PermImport: "导入",
+				store.PermExport: "导出",
+			}[perm])
+			return
+		}
+		next(w, r)
+	}
 }
 
 type importPreviewItem struct {
@@ -167,15 +181,26 @@ var secretKeys = map[string]bool{
 }
 
 // exportAll GET /export?redact=1（默认脱敏）。
+// 普通用户导出自己的资源；admin 默认全部，?owner=me 仅导出自己的。
 func (h *ImportExportHandler) exportAll(w http.ResponseWriter, r *http.Request) {
 	redact := r.URL.Query().Get("redact") != "0"
 
-	monitors, _, err := h.St.ListMonitors(r.Context(), store.MonitorFilter{PerPage: 10000})
+	u := authUser(r)
+	filter := store.MonitorFilter{PerPage: 10000}
+	if !isAdmin(u) || r.URL.Query().Get("owner") == "me" {
+		filter.OwnerID = u.ID
+	}
+	monitors, _, err := h.St.ListMonitors(r.Context(), filter)
 	if err != nil {
 		writeInternalError(w, err)
 		return
 	}
-	channels, err := h.St.ListChannels(r.Context())
+	var channels []*store.Channel
+	if isAdmin(u) {
+		channels, err = h.St.ListChannelsAll(r.Context())
+	} else {
+		channels, err = h.St.ListChannelsVisible(r.Context(), u.ID)
+	}
 	if err != nil {
 		writeInternalError(w, err)
 		return

@@ -41,6 +41,7 @@ func (s *Server) Handler() http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(securityHeaders)
 	r.Use(auth.Middleware(s.Auth))
+	r.Use(accessLogger) // 须在 auth 之后（记录用户）；panic 交由外层 Recoverer 打印堆栈
 
 	// 无需认证
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -55,13 +56,14 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	// API v1
-	authH := &AuthHandler{Svc: s.Auth}
+	authH := &AuthHandler{Svc: s.Auth, Store: s.Store}
 	r.Route("/api/v1", func(r chi.Router) {
-		// 匿名可达：状态查询（登录页/引导页用）、登录、首次引导、OIDC provider 列表
+		// 匿名可达：状态查询（登录页/引导页用）、登录、首次引导、注册、OIDC provider 列表
 		r.Group(func(r chi.Router) {
 			r.Get("/auth/status", authH.status)
 			r.Post("/auth/login", authH.login)
 			r.Post("/auth/setup", authH.setup)
+			r.Post("/auth/register", authH.register)
 			if s.OIDC != nil {
 				r.Get("/auth/providers", (&OIDCHandler{Svc: s.OIDC, St: s.Store}).list)
 			}
@@ -74,6 +76,15 @@ func (s *Server) Handler() http.Handler {
 
 			r.Post("/auth/logout", authH.logout)
 			r.Get("/auth/csrf", authH.csrf)
+
+			profH := &ProfileHandler{St: s.Store, Svc: s.Auth}
+			profH.routes(r)
+
+			userH := &UserHandler{St: s.Store}
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireAdmin)
+				userH.routes(r)
+			})
 
 				monH := &MonitorHandler{St: s.Store, Registry: s.Registry, Evaluator: s.Evaluator}
 				monH.routes(r)

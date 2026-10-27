@@ -34,11 +34,12 @@ func setupFixture(t *testing.T, st store.Store, cooldownSec int) (*store.Monitor
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatal(err)
 	}
-	ch := &store.Channel{Name: "hook", Type: "webhook", Config: `{}`, Enabled: true}
+	ch := &store.Channel{Name: "hook", Type: "webhook", Config: `{}`, Enabled: true, OwnerID: &u.ID}
 	if err := st.CreateChannel(ctx, ch); err != nil {
 		t.Fatal(err)
 	}
 	m := &store.Monitor{
+		OwnerID:           u.ID,
 		Name:              "mygo",
 		SourceType:        "github_release",
 		SourceConfig:      `{}`,

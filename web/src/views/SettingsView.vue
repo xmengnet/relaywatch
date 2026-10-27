@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { listOIDCProviders, getOIDCProvider, createOIDCProvider, updateOIDCProvider, deleteOIDCProvider, exportUrl, getOIDCCallbackBase, type OIDCProviderInfo } from '@/api/import'
 import { getSettings, putSettings, listChannels } from '@/api/channels'
-
-const { t } = useI18n()
+import logoUrl from '@/assets/logo.svg'
 
 // 告警渠道
 const channels = ref<Array<{ id: number; name: string; type: string }>>([])
 const alertChannels = ref<number[]>([])
 const savingAlert = ref(false)
+
+// 注册开关
+const registrationEnabled = ref(false)
+const registrationRole = ref('user')
+const registrationNeedEmail = ref(false)
+const savingReg = ref(false)
 
 // OIDC（仅 admin 看得到写按钮，viewer 只读）
 const providers = ref<OIDCProviderInfo[]>([])
@@ -43,9 +47,28 @@ onMounted(async () => {
   const [c, s, p] = await Promise.all([listChannels(), getSettings(), listOIDCProviders()])
   channels.value = c.items
   alertChannels.value = s.alert_channel_ids ?? []
+  registrationEnabled.value = s.registration_enabled ?? false
+  registrationRole.value = s.registration_default_role || 'user'
+  registrationNeedEmail.value = s.registration_require_email ?? false
   providers.value = p.items
   getOIDCCallbackBase().then(r => { callbackBase.value = r.base_url }).catch(() => {})
 })
+
+async function saveRegistration() {
+  savingReg.value = true
+  try {
+    await putSettings({
+      registration_enabled: registrationEnabled.value,
+      registration_default_role: registrationRole.value,
+      registration_require_email: registrationNeedEmail.value,
+    })
+    toast('注册设置已保存')
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    savingReg.value = false
+  }
+}
 
 async function saveAlert() {
   savingAlert.value = true
@@ -139,6 +162,28 @@ function downloadExport(redact: boolean) {
     <div class="text-h5 mb-4">系统设置</div>
 
     <v-card class="pa-6 mb-4" max-width="860">
+      <div class="text-subtitle-1 font-weight-medium mb-2">注册</div>
+      <div class="text-body-2 text-medium-emphasis mb-4">
+        开放后登录页显示注册入口，新用户可自助创建账户；关闭时注册接口直接 404。
+      </div>
+      <v-switch
+        v-model="registrationEnabled" color="primary" density="compact" hide-details
+        :label="registrationEnabled ? '已开放自助注册' : '已关闭（仅管理员手工建号）'" class="mb-2"
+      />
+      <v-select
+        v-model="registrationRole" :items="[{ value: 'user', title: '用户（可管理自己的监控）' }, { value: 'viewer', title: '只读（仅查看）' }]"
+        item-value="value" item-title="title" label="注册用户默认角色" max-width="360" class="mb-2" :disabled="!registrationEnabled"
+      />
+      <v-switch
+        v-model="registrationNeedEmail" color="primary" density="compact" hide-details label="注册时必填邮箱"
+        class="mb-2" :disabled="!registrationEnabled"
+      />
+      <div class="d-flex justify-end">
+        <v-btn color="primary" :loading="savingReg" @click="saveRegistration">保存</v-btn>
+      </div>
+    </v-card>
+
+    <v-card class="pa-6 mb-4" max-width="860">
       <div class="text-subtitle-1 font-weight-medium mb-2">系统告警渠道</div>
       <div class="text-body-2 text-medium-emphasis mb-4">
         源不可用（连续检查失败）或上游消失（missing）时向这些渠道发告警。
@@ -190,9 +235,16 @@ function downloadExport(redact: boolean) {
     </v-card>
 
     <v-card class="pa-6" max-width="860">
-      <div class="text-subtitle-1 font-weight-medium mb-2">关于</div>
+      <div class="d-flex align-center mb-3">
+        <img :src="logoUrl" alt="RelayWatch logo" width="44" height="44" class="rounded-lg me-3" />
+        <div>
+          <div class="text-subtitle-1 font-weight-medium">RelayWatch</div>
+          <div class="text-caption text-medium-emphasis">基于 Go 的轻量级版本更新监控</div>
+        </div>
+      </div>
       <div class="text-body-2 text-medium-emphasis">
-        {{ t('auth.logout') }} 等界面文案通过 i18n 管理；调度参数在 config.yaml 中调整。
+        追踪软件源与上游发布，新版本可用时通过告警渠道推送通知。数据全部保存在自托管环境中。
+        调度、限流等参数在 <code>config.yaml</code> 中调整。
       </div>
     </v-card>
 
