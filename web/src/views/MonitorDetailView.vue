@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import StatusChip from '@/components/StatusChip.vue'
 import RelativeTime from '@/components/RelativeTime.vue'
 import VersionDiff from '@/components/VersionDiff.vue'
+import { useSse } from '@/composables/useSse'
 import { getMonitor, checkNow, ackMonitor, listHistory, listChanges, type CheckHistoryItem, type VersionChangeItem } from '@/api/monitors'
 import type { Monitor } from '@/api/types'
 
@@ -19,6 +20,7 @@ const changes = ref<VersionChangeItem[]>([])
 const snackbar = ref(false)
 const snackbarText = ref('')
 const snackbarColor = ref('success')
+const refMonitorName = ref('')
 
 const id = computed(() => route.params.id as string)
 
@@ -42,10 +44,24 @@ onMounted(async () => {
 
 async function reload() {
   monitor.value = await getMonitor(id.value)
+  if (monitor.value?.reference_monitor_id) {
+    getMonitor(monitor.value.reference_monitor_id)
+      .then(r => { refMonitorName.value = r.name })
+      .catch(() => { refMonitorName.value = '' })
+  } else {
+    refMonitorName.value = ''
+  }
   const [h, c] = await Promise.all([listHistory(id.value, 1, 10), listChanges(id.value, 1, 10)])
   history.value = h.items
   changes.value = c.items
 }
+
+// SSE 实时更新：收到本条监控的检查完成通知时立即刷新详情与历史
+useSse('check.done', (data: any) => {
+  if (data && String(data.monitor_id) === String(id.value)) {
+    reload()
+  }
+})
 
 async function doCheck() {
   checking.value = true
@@ -173,6 +189,30 @@ async function doDelete() {
           <div class="d-flex justify-space-between py-1">
             <span class="text-medium-emphasis">上次检查</span>
             <span><RelativeTime :time="monitor.last_checked_at" /></span>
+          </div>
+          <div v-if="monitor.reference_monitor_id" class="mt-4 pt-4 border-t">
+            <div class="text-subtitle-2 font-weight-medium mb-2">双轨对比</div>
+            <div class="d-flex justify-space-between align-center py-1">
+              <span class="text-medium-emphasis">对比状态</span>
+              <v-chip v-if="monitor.compare_state === 'lagging'" size="small" color="error" variant="flat" label>落后</v-chip>
+              <v-chip v-else-if="monitor.compare_state === 'in_sync'" size="small" color="success" variant="tonal" label>一致</v-chip>
+              <v-chip v-else-if="monitor.compare_state === 'ahead'" size="small" color="purple" variant="tonal" label>领先</v-chip>
+              <v-chip v-else size="small" variant="text" label>待对比</v-chip>
+            </div>
+            <div class="d-flex justify-space-between py-1">
+              <span class="text-medium-emphasis">上游参照</span>
+              <router-link :to="`/monitors/${monitor.reference_monitor_id}`" class="text-decoration-none">
+                {{ refMonitorName || `#${monitor.reference_monitor_id}` }}
+              </router-link>
+            </div>
+            <div class="d-flex justify-space-between py-1">
+              <span class="text-medium-emphasis">上游版本</span>
+              <code>{{ monitor.compare_ref_version || '—' }}</code>
+            </div>
+            <div v-if="monitor.compare_since" class="d-flex justify-space-between py-1">
+              <span class="text-medium-emphasis">状态更新于</span>
+              <span><RelativeTime :time="monitor.compare_since" /></span>
+            </div>
           </div>
           <div v-if="monitor.last_error" class="mt-2">
             <v-alert type="error" density="compact" variant="tonal">{{ monitor.last_error }}</v-alert>

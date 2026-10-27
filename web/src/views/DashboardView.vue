@@ -1,30 +1,43 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { getStats } from '@/api/monitors'
-import { listMonitors } from '@/api/monitors'
+import { getStats, listMonitors } from '@/api/monitors'
+import { useSse } from '@/composables/useSse'
 import StatusChip from '@/components/StatusChip.vue'
 import RelativeTime from '@/components/RelativeTime.vue'
 import VersionDiff from '@/components/VersionDiff.vue'
 import type { Monitor } from '@/api/types'
 
-const stats = ref<{ total: number; has_update: number; error: number; ok: number; missing: number; unknown: number } | null>(null)
+const stats = ref<{ total: number; has_update: number; error: number; ok: number; missing: number; unknown: number; lagging?: number } | null>(null)
 const attention = ref<Monitor[]>([])
 
-onMounted(async () => {
+async function refreshDashboard() {
   stats.value = await getStats()
-  // 需要关注：has_update + error，最多 5 条
-  const [upd, err] = await Promise.all([
+  // 需要关注：lagging + has_update + error，最多 5 条
+  const [upd, err, lag] = await Promise.all([
     listMonitors({ state: 'has_update', per_page: 5 }),
     listMonitors({ state: 'error', per_page: 5 }),
+    listMonitors({ compare: 'lagging', per_page: 5 }),
   ])
-  attention.value = [...upd.items, ...err.items].slice(0, 5)
+  const map = new Map<number, Monitor>()
+  for (const item of [...lag.items, ...upd.items, ...err.items]) {
+    map.set(item.id, item)
+  }
+  attention.value = Array.from(map.values()).slice(0, 5)
+}
+
+onMounted(() => {
+  refreshDashboard()
 })
+
+// SSE 实时更新：检查完成或投递完成时无刷新更新仪表盘
+useSse('check.done', () => { refreshDashboard() })
+useSse('delivery.done', () => { refreshDashboard() })
 
 const cards = [
   { key: 'total', label: '监控总数', color: 'primary', icon: 'mdi-radar', to: '/monitors' },
   { key: 'has_update', label: '有更新', color: 'warning', icon: 'mdi-arrow-up-circle', to: '/monitors?state=has_update' },
+  { key: 'lagging', label: '上游落后', color: 'deep-orange', icon: 'mdi-clock-alert-outline', to: '/monitors?compare=lagging' },
   { key: 'error', label: '异常', color: 'error', icon: 'mdi-alert-circle', to: '/monitors?state=error' },
-  { key: 'ok', label: '正常运行', color: 'success', icon: 'mdi-check-circle', to: '/monitors?state=up_to_date' },
 ] as const
 </script>
 
@@ -56,6 +69,9 @@ const cards = [
             {{ m.source_type }}
             <span class="mx-2">·</span>
             <VersionDiff :old-version="m.current_version" :new-version="m.latest_version" />
+            <v-chip v-if="m.compare_state === 'lagging'" size="x-small" color="error" class="ms-2" label>
+              落后 ({{ m.compare_ref_version }})
+            </v-chip>
             <span v-if="m.last_error" class="text-error"> {{ m.last_error }}</span>
           </v-list-item-subtitle>
           <template #append>

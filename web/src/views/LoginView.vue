@@ -15,7 +15,36 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 const errorMsg = ref('')
-const oidcProviders = ref<Array<{ name: string }>>([])
+const oidcProviders = ref<Array<{ name: string; icon_url?: string }>>([])
+
+// 内置 Provider 图标：按 name 小写匹配（simple-icons CDN，非官方资源）。
+// 加载失败（离线/内网）时回退为默认 mdi 图标，不影响登录。
+const builtinIcons: Record<string, string> = {
+  github: 'https://cdn.jsdelivr.net/npm/simple-icons@13/icons/github.svg',
+  google: 'https://cdn.jsdelivr.net/npm/simple-icons@13/icons/google.svg',
+  gitlab: 'https://cdn.jsdelivr.net/npm/simple-icons@13/icons/gitlab.svg',
+  gitea: 'https://cdn.jsdelivr.net/npm/simple-icons@13/icons/gitea.svg',
+  casdoor: 'https://cdn.jsdelivr.net/npm/simple-icons@13/icons/casdoor.svg',
+  keycloak: 'https://cdn.jsdelivr.net/npm/simple-icons@13/icons/keycloak.svg',
+  authentik: 'https://cdn.jsdelivr.net/npm/simple-icons@13/icons/authentik.svg',
+  authelia: 'https://cdn.jsdelivr.net/npm/simple-icons@13/icons/authelia.svg',
+  nextcloud: 'https://cdn.jsdelivr.net/npm/simple-icons@13/icons/nextcloud.svg',
+  okta: 'https://cdn.jsdelivr.net/npm/simple-icons@13/icons/okta.svg',
+  auth0: 'https://cdn.jsdelivr.net/npm/simple-icons@13/icons/auth0.svg',
+}
+
+const failedIcons = ref(new Set<string>())
+
+function providerIcon(p: { name: string; icon_url?: string }): string {
+  if (failedIcons.value.has(p.name)) return ''
+  if (p.icon_url) return p.icon_url
+  return builtinIcons[p.name.toLowerCase()] ?? ''
+}
+
+function onIconError(name: string) {
+  failedIcons.value.add(name)
+  failedIcons.value = new Set(failedIcons.value)
+}
 
 onMounted(async () => {
   if (route.query.error) {
@@ -80,12 +109,40 @@ async function submit() {
         v-for="p in oidcProviders"
         :key="p.name"
         block
-        variant="tonal"
-        class="mb-2"
+        variant="outlined"
+        color="grey-darken-1"
+        class="oidc-btn mb-2"
         :href="`/auth/oidc/${p.name}`"
       >
-        使用 {{ p.name }} 登录
+        <template #prepend>
+          <v-img
+            v-if="providerIcon(p)"
+            :src="providerIcon(p)"
+            width="20"
+            height="20"
+            contain
+            class="mr-2"
+            :alt="p.name"
+            @error="onIconError(p.name)"
+          />
+          <v-icon v-else icon="mdi-shield-account" size="20" class="mr-2" />
+        </template>
+        <span class="flex-grow-1 text-center">使用 {{ p.name }} 登录</span>
       </v-btn>
     </template>
   </v-card>
 </template>
+
+<style scoped>
+/* 图二风格：白底、浅描边、图标在左、文字居中 */
+.oidc-btn {
+  background: #fff;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
+}
+.oidc-btn :deep(.v-btn__prepend) {
+  position: absolute;
+  left: 16px;
+}
+</style>

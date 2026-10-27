@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,14 +10,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"relaywatch/internal/compare"
 	"relaywatch/internal/source"
 	"relaywatch/internal/store"
 )
 
 // MonitorHandler 监控 CRUD。
 type MonitorHandler struct {
-	St       store.Store
-	Registry *source.Registry
+	St        store.Store
+	Registry  *source.Registry
+	Evaluator *compare.Evaluator
 }
 
 func (h *MonitorHandler) routes(r chi.Router) {
@@ -33,8 +36,9 @@ func (h *MonitorHandler) routes(r chi.Router) {
 func (h *MonitorHandler) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.MonitorFilter{
-		State:     store.MonitorState(q.Get("state")),
-		Tag:       q.Get("tag"),
+		State:        store.MonitorState(q.Get("state")),
+		CompareState: q.Get("compare"),
+		Tag:          q.Get("tag"),
 		Search:    q.Get("q"),
 		SortBy:    q.Get("sort"),
 		SortOrder: q.Get("order"),
@@ -64,12 +68,15 @@ type monitorPayload struct {
 	VersionSuffix       string          `json:"version_suffix"`
 	VersionIncludeRegex string          `json:"version_include_regex"`
 	VersionIgnoreRegex  string          `json:"version_ignore_regex"`
+	FromPattern         string          `json:"from_pattern"`
+	ToPattern           string          `json:"to_pattern"`
 	IntervalSec         int             `json:"interval_sec"`
 	Enabled             *bool           `json:"enabled"`
 	NotifyCooldownSec   int             `json:"notify_cooldown_sec"`
 	Tags                []string        `json:"tags"`
 	Note                string          `json:"note"`
 	ChannelIDs          []int64         `json:"channel_ids"`
+	ReferenceMonitorID  *int64          `json:"reference_monitor_id"`
 	// 手动改基线用于触发更新测试（需求验收 5）
 	CurrentVersion *string `json:"current_version"`
 	State          *string `json:"state"`
@@ -88,6 +95,32 @@ func (p *monitorPayload) validate() error {
 	return nil
 }
 
+func (h *MonitorHandler) validateReference(ctx context.Context, selfID int64, refID *int64) error {
+	if refID == nil {
+		return nil
+	}
+	if selfID > 0 && *refID == selfID {
+		return errors.New("不能将自身设为参照监控")
+	}
+	ref, err := h.St.GetMonitor(ctx, *refID)
+	if errors.Is(err, store.ErrNotFound) || ref == nil {
+		return errors.New("参照监控不存在")
+	}
+	if err != nil {
+		return err
+	}
+	if ref.ReferenceMonitorID != nil {
+		return errors.New("参照监控不能已有上游参照（仅支持单层参照）")
+	}
+	if selfID > 0 {
+		followers, err := h.St.ListFollowerMonitors(ctx, selfID)
+		if err == nil && len(followers) > 0 {
+			return errors.New("当前监控已被其他监控设为参照，不能再设置上游参照")
+		}
+	}
+	return nil
+}
+
 func (h *MonitorHandler) create(w http.ResponseWriter, r *http.Request) {
 	var p monitorPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
@@ -102,6 +135,10 @@ func (h *MonitorHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := h.validateReference(r.Context(), 0, p.ReferenceMonitorID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if p.IntervalSec == 0 {
 		p.IntervalSec = 300 // 全局默认接配置后调整
 	}
@@ -110,6 +147,9 @@ func (h *MonitorHandler) create(w http.ResponseWriter, r *http.Request) {
 	if err := h.St.CreateMonitor(r.Context(), m); err != nil {
 		writeInternalError(w, err)
 		return
+	}
+	if m.ReferenceMonitorID != nil && h.Evaluator != nil {
+		_ = h.Evaluator.EvaluatePair(r.Context(), m.ID)
 	}
 	out, err := h.St.GetMonitor(r.Context(), m.ID)
 	if err != nil {
@@ -163,10 +203,17 @@ func (h *MonitorHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := h.validateReference(r.Context(), id, p.ReferenceMonitorID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	applyPayload(m, &p)
 	if err := h.St.UpdateMonitor(r.Context(), m); err != nil {
 		writeInternalError(w, err)
 		return
+	}
+	if m.ReferenceMonitorID != nil && h.Evaluator != nil {
+		_ = h.Evaluator.EvaluatePair(r.Context(), id)
 	}
 	out, err := h.St.GetMonitor(r.Context(), id)
 	if err != nil {
@@ -181,6 +228,7 @@ func (h *MonitorHandler) remove(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	_ = h.St.ClearFollowerReferences(r.Context(), id)
 	if err := h.St.DeleteMonitor(r.Context(), id); err != nil {
 		writeInternalError(w, err)
 		return
@@ -268,6 +316,11 @@ func (h *MonitorHandler) validateSourceConfig(p *monitorPayload) error {
 	if err := source.ValidateVersionFilters(p.VersionIncludeRegex, p.VersionIgnoreRegex); err != nil {
 		return err
 	}
+	if p.FromPattern != "" {
+		if _, err := source.RewriteVersion("", p.FromPattern, p.ToPattern); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -280,12 +333,15 @@ func payloadToMonitor(p *monitorPayload) *store.Monitor {
 		VersionSuffix:       p.VersionSuffix,
 		VersionIncludeRegex: p.VersionIncludeRegex,
 		VersionIgnoreRegex:  p.VersionIgnoreRegex,
+		FromPattern:         p.FromPattern,
+		ToPattern:           p.ToPattern,
 		IntervalSec:         p.IntervalSec,
 		Enabled:             true,
 		NotifyCooldownSec:   p.NotifyCooldownSec,
 		Tags:                p.Tags,
 		Note:                p.Note,
 		ChannelIDs:          p.ChannelIDs,
+		ReferenceMonitorID:  p.ReferenceMonitorID,
 	}
 	if p.Enabled != nil {
 		m.Enabled = *p.Enabled
@@ -306,6 +362,9 @@ func applyPayload(m *store.Monitor, p *monitorPayload) {
 	m.VersionSuffix = p.VersionSuffix
 	m.VersionIncludeRegex = p.VersionIncludeRegex
 	m.VersionIgnoreRegex = p.VersionIgnoreRegex
+	m.FromPattern = p.FromPattern
+	m.ToPattern = p.ToPattern
+	m.ReferenceMonitorID = p.ReferenceMonitorID
 	if p.IntervalSec > 0 {
 		m.IntervalSec = p.IntervalSec
 	}

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { listOIDCProviders, createOIDCProvider, deleteOIDCProvider, exportUrl, type OIDCProviderInfo } from '@/api/import'
+import { listOIDCProviders, getOIDCProvider, createOIDCProvider, updateOIDCProvider, deleteOIDCProvider, exportUrl, getOIDCCallbackBase, type OIDCProviderInfo } from '@/api/import'
 import { getSettings, putSettings, listChannels } from '@/api/channels'
 
 const { t } = useI18n()
@@ -17,9 +17,23 @@ const isSetupOpen = ref(false)
 const savingProvider = ref(false)
 const providerError = ref('')
 const pForm = ref()
-const pState = ref({
-  name: '', issuer: '', client_id: '', client_secret: '', scopes: 'openid email profile', claim_rules: '',
+const editingId = ref<number | null>(null)
+const emptyProvider = () => ({
+  name: '', issuer: '', client_id: '', client_secret: '', scopes: 'openid email profile', claim_rules: '', icon_url: '',
 })
+const pState = ref(emptyProvider())
+const callbackBase = ref('')
+
+const callbackURL = computed(() => `${callbackBase.value}/auth/oidc/${pState.value.name || '{名称}'}/callback`)
+
+async function copyCallback() {
+  try {
+    await navigator.clipboard.writeText(callbackURL.value.replace('{名称}', ''));
+    toast('回调地址已复制（名称为空时请自行补上）')
+  } catch {
+    toast('复制失败，请手动选择复制', 'error')
+  }
+}
 
 const snackbar = ref(false)
 const snackbarText = ref('')
@@ -30,6 +44,7 @@ onMounted(async () => {
   channels.value = c.items
   alertChannels.value = s.alert_channel_ids ?? []
   providers.value = p.items
+  getOIDCCallbackBase().then(r => { callbackBase.value = r.base_url }).catch(() => {})
 })
 
 async function saveAlert() {
@@ -45,9 +60,31 @@ async function saveAlert() {
 }
 
 function openProvider() {
-  pState.value = { name: '', issuer: '', client_id: '', client_secret: '', scopes: 'openid email profile', claim_rules: '' }
+  editingId.value = null
+  pState.value = emptyProvider()
   providerError.value = ''
   isSetupOpen.value = true
+}
+
+async function editProvider(p: OIDCProviderInfo) {
+  if (!p.id) return
+  try {
+    const full = await getOIDCProvider(p.id)
+    editingId.value = full.id ?? null
+    pState.value = {
+      name: full.name,
+      issuer: full.issuer ?? '',
+      client_id: full.client_id ?? '',
+      client_secret: '', // 不回显，留空 = 不修改
+      scopes: full.scopes ?? 'openid email profile',
+      claim_rules: full.claim_rules ?? '',
+      icon_url: full.icon_url ?? '',
+    }
+    providerError.value = ''
+    isSetupOpen.value = true
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error')
+  }
 }
 
 async function saveProvider() {
@@ -58,10 +95,17 @@ async function saveProvider() {
   try {
     const body: Record<string, unknown> = { ...pState.value }
     if (body.claim_rules === '') body.claim_rules = undefined
-    await createOIDCProvider(body)
+    if (editingId.value) {
+      // 编辑：secret 留空 = 不修改
+      if (body.client_secret === '') delete body.client_secret
+      await updateOIDCProvider(editingId.value, body)
+      toast('Provider 已保存')
+    } else {
+      await createOIDCProvider(body)
+      toast('Provider 已创建')
+    }
     isSetupOpen.value = false
     providers.value = (await listOIDCProviders()).items
-    toast('Provider 已创建')
   } catch (e) {
     providerError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -126,6 +170,7 @@ function downloadExport(redact: boolean) {
           <v-list-item-title class="font-weight-medium">{{ p.name }}</v-list-item-title>
           <v-list-item-subtitle>{{ p.issuer }}</v-list-item-subtitle>
           <template #append>
+            <v-btn icon="mdi-pencil" size="small" variant="text" aria-label="编辑" @click="editProvider(p)" />
             <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="删除" @click="removeProvider(p)" />
           </template>
         </v-list-item>
@@ -153,16 +198,42 @@ function downloadExport(redact: boolean) {
 
     <v-dialog v-model="isSetupOpen" max-width="560">
       <v-card class="pa-6">
-        <div class="text-h6 mb-4">添加 OIDC Provider</div>
+        <div class="text-h6 mb-4">{{ editingId ? '编辑 OIDC Provider' : '添加 OIDC Provider' }}</div>
         <v-form ref="pForm" @submit.prevent="saveProvider">
-          <v-text-field v-model="pState.name" label="名称 *" hint="用于登录按钮与 URL，如 github" persistent-hint :rules="[v => !!v || '必填']" />
-          <v-text-field v-model="pState.issuer" label="Issuer *" placeholder="https://accounts.google.com" :rules="[v => !!v || '必填']" />
-          <v-text-field v-model="pState.client_id" label="Client ID *" :rules="[v => !!v || '必填']" />
-          <v-text-field v-model="pState.client_secret" label="Client Secret *" type="password" :rules="[v => !!v || '必填']" />
-          <v-text-field v-model="pState.scopes" label="Scopes" hint="默认 openid email profile" persistent-hint />
-          <v-textarea v-model="pState.claim_rules" label="Claim 限制（可选）" rows="3" placeholder='{"email_domains":["example.com"]}' />
+          <v-text-field v-model="pState.name" label="名称 *" hint="用于登录按钮与 URL，如 github、casdoor" persistent-hint :rules="[v => !!v || '必填']" class="mb-2" />
+          <div v-if="callbackBase" class="text-caption text-medium-emphasis mb-4">
+            回调地址（填到 IdP 的 Redirect URI）：
+            <code class="text-none">{{ callbackURL }}</code>
+            <v-btn size="x-small" variant="text" prepend-icon="mdi-content-copy" class="ms-1 text-none" @click="copyCallback">复制</v-btn>
+          </div>
+          <v-text-field v-model="pState.issuer" label="Issuer *" placeholder="https://accounts.google.com" hint="IdP 的 issuer 地址，服务端读 {issuer}/.well-known/openid-configuration 发现端点" persistent-hint :rules="[v => !!v || '必填']" class="mb-4" />
+          <v-text-field v-model="pState.client_id" label="Client ID *" :rules="[v => !!v || '必填']" class="mb-4" />
+          <v-text-field
+            v-model="pState.client_secret" label="Client Secret" type="password"
+            :rules="editingId ? [] : [v => !!v || '必填']"
+            :hint="editingId ? '留空表示不修改' : '在 IdP 的应用配置里创建'" persistent-hint
+            class="mb-4"
+          />
+          <v-text-field
+            v-model="pState.icon_url" label="图标 URL（可选）"
+            hint="登录按钮左侧显示；留空按名称自动匹配内置图标（github/google/gitlab 等），匹配不到用默认图标"
+            persistent-hint
+            class="mb-4"
+          />
+          <v-text-field
+            v-model="pState.scopes" label="Scopes"
+            hint="空格分隔，默认 openid email profile，一般不用改；仅当 IdP 要求特殊 scope（如 groups）时添加"
+            persistent-hint
+            class="mb-4"
+          />
+          <v-textarea
+            v-model="pState.claim_rules" label="Claim 限制（可选）" rows="3" placeholder='{"email_domains":["example.com"]}'
+            hint="JSON，如按邮箱域名限制可用的用户；留空不限制"
+            persistent-hint
+            class="mb-4"
+          />
           <v-alert v-if="providerError" type="error" density="compact" class="mb-2">{{ providerError }}</v-alert>
-          <div class="d-flex justify-end ga-2">
+          <div class="d-flex justify-end ga-2 mt-2">
             <v-btn variant="text" @click="isSetupOpen = false">取消</v-btn>
             <v-btn color="primary" type="submit" :loading="savingProvider">保存</v-btn>
           </div>

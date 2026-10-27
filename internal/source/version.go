@@ -134,3 +134,28 @@ func ValidateVersionFilters(include, ignore string) error {
 	}
 	return nil
 }
+
+var (
+	pyBackrefRe1 = regexp.MustCompile(`\\([0-9]+)`)
+	pyBackrefRe2 = regexp.MustCompile(`\\g<([0-9a-zA-Z_]+)>`)
+)
+
+func pythonReplToGoRepl(repl string) string {
+	r := pyBackrefRe2.ReplaceAllString(repl, "${$1}")
+	return pyBackrefRe1.ReplaceAllString(r, "${$1}")
+}
+
+// RewriteVersion 应用 from_pattern 与 to_pattern 正则替换重写版本号。
+// 支持 Go 标准 $1 语法及 nvchecker / Python 惯用的 \1、\g<1> 捕获组语法。
+func RewriteVersion(v, fromPattern, toPattern string) (string, error) {
+	if fromPattern == "" {
+		return v, nil
+	}
+	re, err := regexp.Compile(fromPattern)
+	if err != nil {
+		return v, fmt.Errorf("from_pattern 不是合法正则: %w", err)
+	}
+	repl := pythonReplToGoRepl(toPattern)
+	return re.ReplaceAllString(v, repl), nil
+}
+

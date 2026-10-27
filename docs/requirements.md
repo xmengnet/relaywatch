@@ -1,6 +1,6 @@
 # RelayWatch 需求文档
 
-版本：0.2.1（草案）
+版本：0.3.1（草案）
 日期：2026-10-27
 
 变更：v0.1 → v0.2 根据评审意见修订，新增导入/导出、API Token、版本过滤、批量确认、系统告警渠道；状态机增加 `missing` 态；明确静默期与版本回退语义；调度增加抖动与 per-host 限速。
@@ -8,6 +8,12 @@
 v0.2 → v0.2.1 补充静默期与确认/忽略的交互规则：`deferred` 投递在用户 ack、手动重发、监控删除或停用时立即作废，作废为终态；静默期结束的补发需重新校验监控仍处于 `has_update`。
 
 v0.2.1 → 实现状态（2026-10-27）：M1–M4 已实现并冒烟验收。验收标准 2/3/4(webhook 替代)/5/9/10/11/12 已实测通过；标准 1（引导流程）通过；标准 6（OIDC）代码就绪、待真实 IdP 实测；标准 7（重启恢复）由调度基于 last_checked_at 的设计保证、待专项测试。手动重发补充语义：对已 ack 的记录允许 Force 重发（跳过周期校验，版本取发送时刻 latest）。
+
+v0.2.1 → v0.3.0（M6 规划增补，2026-10-27）：新增 §3.8 版本对比（双轨）与验收标准 13–18；§5 中「上游 vs 本地双轨对比」由 v2 候选转为已规划；里程碑增加 M6。注意：§3.8 为规划，尚未实现（M1–M5 为已实现范围）。
+
+v0.3.0 → v0.3.1（nvchecker 全面兼容与扩展源规划，2026-10-27）：目标全面对齐 nvchecker 的 44 种监控源，保证现有 nvchecker keyfile TOML 导入 100% 可用；在 §3.1 增加扩展源分类规划与规范化高级规则（from_pattern/to_pattern）；里程碑增加 M7。
+
+实现状态（2026-10-27 续）：M6 规划全部落地——§3.8 双轨对比与 §3.4 SSE 实时推送全栈实现（数据模型、迁移 0005、版本对齐层、评估器、Checker 钩子、通知管线、EventBroker、前端 useSse 与无刷新更新全部完成并测试通过）；§3.1 中的 33 种监控源与 from_pattern/to_pattern 正则重写流水线全部落地并无损导入通过。
 
 ## 1. 项目背景
 
@@ -36,7 +42,7 @@ RelayWatch 的目标：**把 nvchecker 式的精确版本检测，和 changedete
 
 | 源类型 | 说明 | 必需参数 | 可选参数 |
 |---|---|---|---|
-| `github_release` | GitHub 最新 Release | `repo`（`owner/name`） | `include_prerelease`、`token` |
+| `github_release` | GitHub 最新 Release | `repo`（`owner/name`） | `include_prerelease`、`token`、`use_release_name` |
 | `github_tag` | GitHub 最大版本 tag | `repo` | `tag_pattern`、`token` |
 | `gitlab_release` | GitLab 最新 Release | `host`、`project` | `token` |
 | `gitea_release` | Gitea / Forgejo Release | `host`、`repo` | `token` |
@@ -50,20 +56,39 @@ RelayWatch 的目标：**把 nvchecker 式的精确版本检测，和 changedete
 | `http_regex` | 任意网页正则抓取 | `url`、`regex` | `headers`、`group` |
 | `docker_tag` | 容器镜像 tag | `image` | `tag_regex` |
 
+**nvchecker 兼容扩展规划（全面对齐 44 种 nvchecker source）**：
+
+为确保导入 nvchecker 的 TOML 配置 100% 顺畅并覆盖各类技术栈，新增规划以下监控源：
+
+| 规划分类 | 包含源类型与说明 | 对标 nvchecker 源 |
+|---|---|---|
+| **上游版本聚合服务** | `repology` (Repology API 跨发行版聚合)、`anitya` (release-monitoring.org 开源上游追踪) | `repology`、`anitya` |
+| **语言包管理器** | `rubygems` (RubyGems)、`maven` (Maven Central / 自建仓库 XML 元数据)、`packagist` (PHP Composer)、`cpan` (Perl)、`cran` (R)、`hackage` (Haskell)、`opam` (OCaml) | `gems`、`maven`、`packagist`、`cpan`、`cran`、`hackage`、`opam` |
+| **通用 VCS 与代码托管** | `git_tag` (通用 Git 远程 tag，免平台 API 限制)、`bitbucket` (Bitbucket Tags/Releases)、`pagure` (Pagure Git Tags) | `git`、`git_dulwich`、`git_pygit2`、`bitbucket`、`pagure` |
+| **通用网络提取扩展** | `http_header` (HEAD/GET 抓取响应头如 Location 重定向)、`htmlparser` (XPath / 节点解析) | `httpheader`、`htmlparser` |
+| **容器镜像扩展** | `container` (遵循标准 OCI Registry V2 规范，支持 GHCR、Quay、私有仓库) | `container` |
+| **Linux 发行版生态** | `debianpkg` (Debian sources API)、`ubuntupkg` (Launchpad API)、`apt` (远程 InRelease/Packages)、`rpmrepo` (远程 repomd.xml) | `debianpkg`、`ubuntupkg`、`apt`、`rpmrepo` |
+| **生态应用市场** | `vsmarketplace` (VS Code 插件)、`openvsx` (Open VSX)、`snapcraft` (Canonical Snap) | `vsmarketplace`、`openvsx`、`snapcraft` |
+| **系统与受控源** | `manual` (静态手动版本)、`cmd` (严格受控的本地脚本执行，默认禁止) | `manual`、`cmd` |
+
+*注：针对 nvchecker 的 `pacman`/`alpm` 本地源，因 RelayWatch 为容器化/跨平台 Web 服务，导入时自动转换为 `arch_official` 远程 API 抓取，免除本地 pacman 数据库依赖。*
+
 **版本过滤规则**（每条监控可选）：
 - `version_include_regex`：只有匹配的版本才参与更新判断（如 `^1\.` 只跟踪 1.x）
 - `version_ignore_regex`：匹配的版本被跳过（如 `nightly|snapshot`）
+- `version_ignored`：空格分隔的显式跳过版本列表（对标 nvchecker `ignored`）
 - 过滤在版本规范化之后、比较之前执行；被过滤的版本仍记入检查历史，但不改变状态、不触发通知
 
-**版本号提取规则**：
+**版本号提取与规范化高级规则**：
 - 可配置 `prefix` / `suffix` 剥离（如 `v` 前缀）
-- 版本比较使用语义化版本（semver），无法解析时退化为字符串比较并给出警告
+- 正则重写：`from_pattern` 与 `to_pattern`（对标 nvchecker，支持将如 `(\d{4})(\d{2})(\d{2})` 转换为 `\1.\2.\3`）
+- 版本比较使用语义化版本（semver），无法解析时退化为分段比较/字符串比较并给出警告
 - 源返回原始版本字符串，入库前做规范化
 
 **每条监控记录的字段**：
 - 名称（用户可读）
 - 源类型及参数
-- 版本前缀/后缀
+- 版本前缀/后缀、正则重写规则（`from_pattern` / `to_pattern`）
 - 检查间隔（可继承全局默认）
 - 启用/停用开关
 - 通知渠道绑定（多选）
@@ -268,6 +293,46 @@ RelayWatch 的目标：**把 nvchecker 式的精确版本检测，和 changedete
 - Prometheus 指标端点 `/metrics`（可选）：检查次数、失败次数、通知投递数、耗时直方图
 - 可选：内置简单的运行状态页
 
+### 3.8 版本对比（双轨对比）
+
+> 状态：M6 规划，尚未实现。设计方案见 [design.md](./design.md) §17。
+
+把同一软件的两条监控关联起来——一条上游发布源（如 GitHub Release），一条本地/发行版源（如 AUR）——回答「我的包落后了吗」，并在**落后出现、差距扩大、追平**时提醒。
+
+**关联模型**：
+
+- 监控记录增加可选的「上游参照」（`reference_monitor_id`），指向另一条监控；引用方称「跟随监控」，被引用方称「参照监控」
+- 一条监控最多有一个参照；一个参照可被多条监控引用（如 `foo`、`foo-bin`、`foo-git` 同源）
+- 参照监控自身不得再有参照（只允许一层，杜绝链式与环）
+- 删除参照监控：引用方自动解除关联、对比状态清空、待投递的对比通知作废，自身作为普通监控继续工作
+
+**对比状态**（存于跟随监控，与自身状态机正交）：
+
+| 值 | 含义 |
+|---|---|
+| （未配置） | 无参照 |
+| `in_sync` | 跟随方版本 = 参照方版本 |
+| `lagging` | 跟随方版本 < 参照方版本 |
+| `ahead` | 跟随方版本 > 参照方版本（如 AUR 包打了 patch），只展示不提醒 |
+
+**版本对齐**（对比前按源类型执行）：
+
+- `aur` 侧剥离尾部 pkgrel（`-<数字>`）与前导 epoch（`N:`），其余源类型原样；两侧各自应用
+- 必要性：`0.1.19-1` 是合法 semver（`-1` 被解析为预发布），不剥离则 `0.1.19-1 < 0.1.19` 恒成立，AUR 场景会永远误报落后；对齐后 `0.1.19-1` ≡ `0.1.19`
+- 对齐只作用于对比路径，不改变入库版本与「当前/最新版本」的展示
+
+**通知事件**（发送到跟随监控绑定的渠道；复用投递队列的退避重试、静默期、历史与手动重发）：
+
+| 事件 | 触发条件 |
+|---|---|
+| 进入落后 | 已知状态 → `lagging`（含刚配置好参照时发现已落后） |
+| 差距扩大 | 保持 `lagging` 且参照方版本前进（按「上次通知时的参照版本」去重） |
+| 已追平 | `lagging` → `in_sync` |
+
+- 任一侧处于 `error`/`missing`/无版本时**跳过评估、保持上次对比状态**，避免故障期间误报「追平」
+- 进入 `ahead`、未配置 → `in_sync` 等迁移不通知
+- 对比通知在通知历史中标记类型（`kind = compare`），可筛选、可手动重发（按当前状态渲染）
+
 ## 4. 非功能需求
 
 | 项 | 要求 |
@@ -293,7 +358,7 @@ RelayWatch 的目标：**把 nvchecker 式的精确版本检测，和 changedete
 - 不自动修改 PKGBUILD（可列为 v2）
 
 **v2 候选**：
-- 「上游版本 vs 本地/AUR 版本」双轨对比视图：把同一软件的两条监控（上游 + 发行版仓库）关联起来，回答"我的包落后了吗"。AUR 维护者的核心诉求，需要数据模型支持监控分组，v1 先以两条独立监控 + 标签的方式过渡
+- 「上游版本 vs 本地/AUR 版本」双轨对比：**已规划为 §3.8（M6）**——把同一软件的上游源与发行版源关联，检测落后并在落后出现、差距扩大、追平时提醒。M1–M5 期间以两条独立监控 + 标签的方式过渡
 - Webhook 入站（外部触发检查）
 - 多用户数据隔离
 
@@ -311,6 +376,14 @@ RelayWatch 的目标：**把 nvchecker 式的精确版本检测，和 changedete
 10. 删除一个 GitHub 仓库（或监控一个不存在仓库），监控状态变为 `missing`，系统告警渠道收到通知
 11. 创建 API Token，用 `curl -H "Authorization: Bearer ..."` 调用 `/api/v1/monitors` 成功；吊销后立即失效
 12. 监控设置 `version_ignore_regex` 后，被忽略的版本不产生更新通知
+13. 新建 GitHub 与 AUR 两条监控，把 AUR 监控的参照指向 GitHub 监控，两侧检查后显示对比状态；版本 `0.1.19-1` 与 `0.1.19` 判定为一致（pkgrel 对齐生效）
+14. 参照监控版本高于跟随监控时，跟随监控进入 `lagging`，其绑定渠道收到一条落后通知；重复检查不重复通知
+15. 落后期间参照监控再发新版，收到一条「差距扩大」通知；跟随监控追上后收到「已追平」通知，对比状态回到 `in_sync`
+16. 跟随监控或参照监控处于 `error`/`missing` 期间，对比状态保持原值、不产生误报通知
+17. 删除参照监控后，跟随监控解除关联、对比字段清空、待投递的对比通知作废，监控本身继续正常检查
+18. 从通知历史手动重发一条对比通知，内容按当前对比状态渲染
+
+> 13–18 为 M6 规划项，尚未实现。
 
 ## 7. 里程碑建议
 
@@ -321,3 +394,5 @@ RelayWatch 的目标：**把 nvchecker 式的精确版本检测，和 changedete
 | M3 | 通知渠道（webhook + telegram）、模板、投递记录、静默期与变更周期语义 |
 | M4 | OIDC、更多源类型、仪表盘、nvchecker 导入 / JSON 导出 |
 | M5 | 指标、Docker 镜像、文档、i18n |
+| M6 | 双轨对比（§3.8）、SSE 实时推送（§3.4） |
+| M7 | nvchecker 全面兼容与扩展源建设（44 种源全面覆盖、高级版本正则重写、标准 OCI 容器、多候选统一挑选） |

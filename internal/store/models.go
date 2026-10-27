@@ -64,6 +64,8 @@ type Monitor struct {
 	VersionSuffix       string
 	VersionIncludeRegex string
 	VersionIgnoreRegex  string
+	FromPattern         string
+	ToPattern           string
 	IntervalSec         int
 	Enabled             bool
 	State               MonitorState
@@ -82,17 +84,25 @@ type Monitor struct {
 	UpdatedAt           time.Time
 
 	ChannelIDs []int64 // 绑定的通知渠道
+
+	// 双轨对比（M6）
+	ReferenceMonitorID *int64
+	CompareState       string // "" | "in_sync" | "lagging" | "ahead"
+	CompareRefVersion  string
+	CompareSince       *time.Time
+	CompareNotifiedRef string
 }
 
 // MonitorFilter 列表查询条件。
 type MonitorFilter struct {
-	State     MonitorState
-	Tag       string
-	Search    string
-	Page      int
-	PerPage   int
-	SortBy    string
-	SortOrder string // asc | desc
+	State        MonitorState
+	CompareState string
+	Tag          string
+	Search       string
+	Page         int
+	PerPage      int
+	SortBy       string
+	SortOrder    string // asc | desc
 }
 
 // CheckHistory 一次检查的记录。
@@ -151,6 +161,8 @@ type Delivery struct {
 	Attempts      int
 	NextAttemptAt *time.Time
 	LastError     string
+	Kind          string // "update" | "compare"
+	Context       string // JSON 快照
 	CreatedAt     time.Time
 	SentAt        *time.Time
 

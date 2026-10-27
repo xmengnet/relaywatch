@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import type { Monitor, MonitorState } from '@/api/types'
 import { listMonitors, batchMonitors, checkNow } from '@/api/monitors'
+import { useSse } from '@/composables/useSse'
+import { useSourceTypes } from '@/composables/useSourceTypes'
 import StatusChip from '@/components/StatusChip.vue'
 import RelativeTime from '@/components/RelativeTime.vue'
 import VersionDiff from '@/components/VersionDiff.vue'
@@ -20,8 +22,12 @@ const itemsPerPage = ref(25)
 const sortBy = ref<Array<{ key: string; order: 'asc' | 'desc' }>>([])
 const search = ref('')
 const stateFilter = ref<MonitorState | ''>('')
+const compareFilter = ref('')
 const selected = ref<Monitor[]>([])
 const checkingIds = ref<Set<number>>(new Set())
+
+const { ensure: ensureSourceTypes, meta: sourceMeta } = useSourceTypes()
+onMounted(() => ensureSourceTypes())
 
 const stateOptions = [
   { title: '全部状态', value: '' },
@@ -32,11 +38,19 @@ const stateOptions = [
   { title: '未知', value: 'unknown' },
 ]
 
+const compareOptions = [
+  { title: '全部对比', value: '' },
+  { title: '落后 (Lagging)', value: 'lagging' },
+  { title: '一致 (In Sync)', value: 'in_sync' },
+  { title: '领先 (Ahead)', value: 'ahead' },
+]
+
 const headers = [
   { title: '名称', key: 'name', sortable: true },
   { title: '源', key: 'source_type', sortable: true },
   { title: '当前', key: 'current_version', sortable: false },
   { title: '最新', key: 'latest_version', sortable: false },
+  { title: '双轨对比', key: 'compare_state', sortable: false },
   { title: '状态', key: 'state', sortable: true },
   { title: '上次检查', key: 'last_checked_at', sortable: true },
   { title: '操作', key: 'actions', sortable: false, align: 'end' as const },
@@ -49,6 +63,7 @@ async function load() {
       page: page.value,
       per_page: itemsPerPage.value,
       state: stateFilter.value || undefined,
+      compare: compareFilter.value || undefined,
       q: search.value || undefined,
       sort: sortBy.value[0]?.key,
       order: sortBy.value[0]?.order,
@@ -60,18 +75,25 @@ async function load() {
   }
 }
 
-// URL 同步：?state=&q=
+// URL 同步：?state=&compare=&q=
 watch(() => route.query, (q) => {
   stateFilter.value = (q.state as MonitorState) || ''
+  compareFilter.value = (q.compare as string) || ''
   search.value = (q.q as string) || ''
 }, { immediate: true })
 
-watch([stateFilter, search], () => {
+watch([stateFilter, compareFilter, search], () => {
   router.replace({ query: {
     state: stateFilter.value || undefined,
+    compare: compareFilter.value || undefined,
     q: search.value || undefined,
   } })
   page.value = 1
+  load()
+})
+
+// SSE 实时更新：后台调度或手动检查完成时实时刷新列表
+useSse('check.done', () => {
   load()
 })
 
@@ -121,6 +143,16 @@ const hasSelected = computed(() => selected.value.length > 0)
         label="状态"
         density="comfortable"
         hide-details
+        style="max-width: 140px"
+      />
+      <v-select
+        v-model="compareFilter"
+        :items="compareOptions"
+        item-title="title"
+        item-value="value"
+        label="双轨对比"
+        density="comfortable"
+        hide-details
         style="max-width: 160px"
       />
       <v-text-field
@@ -165,13 +197,37 @@ const hasSelected = computed(() => selected.value.length > 0)
         </div>
       </template>
       <template #item.source_type="{ item }">
-        <v-chip size="small" variant="tonal" label>{{ item.source_type }}</v-chip>
+        <v-tooltip :text="sourceMeta(item.source_type)?.label || item.source_type" location="top">
+          <template #activator="{ props: tooltipProps }">
+            <span v-bind="tooltipProps" class="d-inline-flex align-center ga-2 cursor-default">
+              <v-icon :icon="sourceMeta(item.source_type)?.icon || 'mdi-radar-outline'" size="20" />
+              <span class="text-medium-emphasis text-body-2">{{ item.source_type }}</span>
+            </span>
+          </template>
+        </v-tooltip>
       </template>
       <template #item.current_version="{ item }">
         <code>{{ item.current_version || '—' }}</code>
       </template>
       <template #item.latest_version="{ item }">
         <VersionDiff :old-version="item.current_version" :new-version="item.latest_version" />
+      </template>
+      <template #item.compare_state="{ item }">
+        <template v-if="item.reference_monitor_id">
+          <v-chip v-if="item.compare_state === 'lagging'" size="small" color="error" variant="flat" label>
+            落后 ({{ item.compare_ref_version || '上游' }})
+          </v-chip>
+          <v-chip v-else-if="item.compare_state === 'in_sync'" size="small" color="success" variant="tonal" label>
+            一致
+          </v-chip>
+          <v-chip v-else-if="item.compare_state === 'ahead'" size="small" color="purple" variant="tonal" label>
+            领先
+          </v-chip>
+          <v-chip v-else size="small" variant="text" label class="text-medium-emphasis">
+            待对比
+          </v-chip>
+        </template>
+        <span v-else class="text-disabled">—</span>
       </template>
       <template #item.state="{ item }">
         <StatusChip :state="item.state" size="small" />

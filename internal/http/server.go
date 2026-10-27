@@ -12,6 +12,7 @@ import (
 
 	"relaywatch/internal/auth"
 	"relaywatch/internal/check"
+	"relaywatch/internal/compare"
 	"relaywatch/internal/notifier"
 	"relaywatch/internal/source"
 	"relaywatch/internal/store"
@@ -26,6 +27,8 @@ type Server struct {
 	Checker   *check.Checker
 	Registry  *source.Registry
 	Notifiers *notifier.Registry
+	Evaluator *compare.Evaluator
+	Broker    *EventBroker
 	TestSender    func(ctx context.Context, ch *store.Channel) error
 	ResendOne     func(ctx context.Context, d *store.Delivery) error
 }
@@ -72,8 +75,8 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/auth/logout", authH.logout)
 			r.Get("/auth/csrf", authH.csrf)
 
-			monH := &MonitorHandler{St: s.Store}
-			monH.routes(r)
+				monH := &MonitorHandler{St: s.Store, Registry: s.Registry, Evaluator: s.Evaluator}
+				monH.routes(r)
 
 			checkH := &CheckHandler{St: s.Store, Checker: s.Checker, Registry: s.Registry}
 			checkH.routes(r)
@@ -99,9 +102,13 @@ func (s *Server) Handler() http.Handler {
 			tokH := &TokenHandler{Svc: s.Auth, St: s.Store}
 			tokH.routes(r)
 
-			r.Get("/stats", func(w http.ResponseWriter, req *http.Request) {
-				s.statsHandler(w, req)
-			})
+				r.Get("/stats", func(w http.ResponseWriter, req *http.Request) {
+					s.statsHandler(w, req)
+				})
+
+				if s.Broker != nil {
+					r.Get("/events", s.Broker.ServeHTTP)
+				}
 		})
 	})
 
@@ -168,9 +175,12 @@ func (s *Server) statsHandler(w http.ResponseWriter, r *http.Request) {
 			stats["missing"] = n
 		case store.StateUnknown:
 			stats["unknown"] = n
-		case store.StateUpToDate:
-			stats["ok"] = n
+			case store.StateUpToDate:
+				stats["ok"] = n
+			}
 		}
-	}
-	writeJSON(w, http.StatusOK, stats)
+		if _, lagging, err := s.Store.ListMonitors(ctx, store.MonitorFilter{CompareState: "lagging", PerPage: 1}); err == nil {
+			stats["lagging"] = lagging
+		}
+		writeJSON(w, http.StatusOK, stats)
 }

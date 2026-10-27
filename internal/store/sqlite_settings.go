@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -10,7 +12,7 @@ import (
 func (s *sqliteStore) GetSetting(ctx context.Context, key string) (string, error) {
 	var value string
 	err := s.db.queryRow(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
-	if err.Error() == "sql: no rows in result set" {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	return value, err

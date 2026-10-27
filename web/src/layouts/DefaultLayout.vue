@@ -24,10 +24,19 @@ const navItems = computed(() => [
   { to: '/settings', icon: 'mdi-cog-outline', title: t('nav.settings') },
 ])
 
-const themeIcon = computed(() => (mode.value === 'dark' ? 'mdi-weather-night' : 'mdi-white-balance-sunny'))
+const themeStates = [
+  { value: 'light', icon: 'mdi-white-balance-sunny', label: '浅色' },
+  { value: 'dark', icon: 'mdi-weather-night', label: '深色' },
+  { value: 'auto', icon: 'mdi-theme-light-dark', label: '跟随系统' },
+] as const
+
+const themeState = computed(() => themeStates.find((s) => s.value === mode.value) ?? themeStates[0])
+const themeIcon = computed(() => themeState.value.icon)
+const themeLabel = computed(() => themeState.value.label)
 
 function toggleTheme() {
-  mode.value = mode.value === 'dark' ? 'light' : 'dark'
+  const idx = themeStates.findIndex((s) => s.value === mode.value)
+  mode.value = themeStates[(idx + 1) % themeStates.length].value
 }
 
 async function doLogout() {
@@ -51,7 +60,7 @@ async function doLogout() {
       <v-app-bar-nav-icon v-if="!mdAndUp" @click="drawer = !drawer" aria-label="菜单" />
       <v-app-bar-title>RelayWatch</v-app-bar-title>
       <template #append>
-        <v-btn :icon="themeIcon" variant="text" aria-label="切换主题" @click="toggleTheme" />
+        <v-btn :icon="themeIcon" variant="text" :aria-label="`主题：${themeLabel}`" :title="`主题：${themeLabel}`" @click="toggleTheme" />
         <v-btn class="me-2" variant="text" @click="doLogout">
           {{ auth.user?.username }} · {{ t('auth.logout') }}
         </v-btn>

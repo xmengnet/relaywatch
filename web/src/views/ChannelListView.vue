@@ -8,6 +8,7 @@ const types = ref<NotifierMeta[]>([])
 const dialog = ref(false)
 const saving = ref(false)
 const testing = ref<number | null>(null)
+const showTemplateHelp = ref(false)
 const errorMsg = ref('')
 const snackbar = ref(false)
 const snackbarText = ref('')
@@ -132,11 +133,11 @@ function typeIcon(t: string) {
   return types.value.find(x => x.type === t)?.icon ?? 'mdi-bell-outline'
 }
 
-// 自定义正文模板说明（Go text/template，可用字段见 notifier.TemplateData）
-const templateHint = [
-  'Go text/template，只作用于正文，留空用默认模板。示例：',
-  '📦 {{ .Monitor.Name }} {{ if .Change.OldVersion }}{{ .Change.OldVersion }} → {{ end }}{{ .Change.NewVersion }}',
-  '可用字段：.Monitor.Name / .Monitor.SourceType / .Monitor.Tags、.Change.OldVersion / .Change.NewVersion / .Change.DetectedAt、.URL；函数 upper 可用',
+// 自定义正文模板示例（Go text/template，可用字段见 notifier.TemplateData）
+const templateExample = [
+  '📦 {{ .Monitor.Name }} 有新版本',
+  '{{ if .Change.OldVersion }}{{ .Change.OldVersion }} → {{ end }}{{ .Change.NewVersion }}',
+  '详情见：{{ .URL }}',
 ].join('\n')
 </script>
 
@@ -232,10 +233,28 @@ const templateHint = [
             v-model="state.template"
             label="自定义模板（可选）"
             rows="3"
-            :hint="templateHint"
+            hint="Go text/template，只作用于正文；留空用默认模板"
             persistent-hint
-            class="mb-4"
+            class="mb-2"
           />
+          <v-expand-transition>
+            <div v-if="showTemplateHelp" class="text-caption mb-4">
+              <div class="mb-1 text-medium-emphasis">示例（渲染效果：一行名称版本，一行链接）：</div>
+              <pre class="text-pre-wrap bg-surface-lighten-2 pa-2 rounded text-mono">{{ templateExample }}</pre>
+              <div class="mt-2 text-medium-emphasis">
+                可用字段：<code>.Monitor.Name</code> / <code>.Monitor.SourceType</code> / <code>.Monitor.Tags</code>、
+                <code>.Change.OldVersion</code> / <code>.Change.NewVersion</code> / <code>.Change.DetectedAt</code>、
+                <code>.URL</code>；函数 <code>upper</code> 可用
+              </div>
+            </div>
+          </v-expand-transition>
+          <v-btn
+            variant="text"
+            size="small"
+            :prepend-icon="showTemplateHelp ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+            class="mb-4 text-none"
+            @click="showTemplateHelp = !showTemplateHelp"
+          >模板写法与示例</v-btn>
           <v-switch v-if="editing" v-model="state.enabled" label="启用" color="primary" />
           <v-alert v-if="errorMsg" type="error" density="compact" class="mb-2">{{ errorMsg }}</v-alert>
           <div class="d-flex justify-end ga-2 mt-2">

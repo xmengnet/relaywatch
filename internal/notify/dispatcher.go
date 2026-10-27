@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"relaywatch/internal/compare"
 	"relaywatch/internal/notifier"
 	"relaywatch/internal/store"
 )
@@ -98,6 +99,84 @@ func (d *Dispatcher) enqueue(ctx context.Context, monitor *store.Monitor, change
 		}
 		d.emit(status)
 		slog.Debug("delivery enqueued", "monitor", m.ID, "channel", cid, "status", status)
+	}
+	return nil
+}
+
+// CompareContext 保存双轨对比通知的事件上下文。
+type CompareContext struct {
+	FollowerID      int64  `json:"follower_id"`
+	FollowerName    string `json:"follower_name"`
+	FollowerVersion string `json:"follower_version"`
+	RefID           int64  `json:"ref_id"`
+	RefName         string `json:"ref_name"`
+	RefVersion      string `json:"ref_version"`
+	Event           string `json:"event"` // entered_lagging | gap_grew | caught_up
+}
+
+// EnqueueCompare 为双轨对比事件创建投递记录。
+func (d *Dispatcher) EnqueueCompare(ctx context.Context, follower, ref *store.Monitor, event compare.EventType) error {
+	m, err := d.Store.GetMonitor(ctx, follower.ID)
+	if err != nil {
+		return fmt.Errorf("reload follower monitor: %w", err)
+	}
+	if len(m.ChannelIDs) == 0 {
+		return nil
+	}
+	channels, err := d.Store.ListChannels(ctx)
+	if err != nil {
+		return err
+	}
+	byID := map[int64]*store.Channel{}
+	for _, c := range channels {
+		byID[c.ID] = c
+	}
+
+	cmpCtx := CompareContext{
+		FollowerID:      follower.ID,
+		FollowerName:    follower.Name,
+		FollowerVersion: follower.LatestVersion,
+		RefID:           ref.ID,
+		RefName:         ref.Name,
+		RefVersion:      ref.LatestVersion,
+		Event:           string(event),
+	}
+	ctxJSON, _ := json.Marshal(cmpCtx)
+
+	now := time.Now()
+	var lastNotified time.Time
+	if m.LastNotifiedAt != nil {
+		lastNotified = *m.LastNotifiedAt
+	}
+	cooldown := time.Duration(m.NotifyCooldownSec) * time.Second
+
+	for _, cid := range m.ChannelIDs {
+		ch := byID[cid]
+		if ch == nil || !ch.Enabled {
+			continue
+		}
+		status := store.DeliveryPending
+		var nextAt time.Time
+		switch {
+		case cooldown > 0 && !lastNotified.IsZero() && now.Sub(lastNotified) < cooldown:
+			status = store.DeliveryDeferred
+			nextAt = lastNotified.Add(cooldown)
+		default:
+			nextAt = now
+		}
+		d1 := &store.Delivery{
+			MonitorID:     m.ID,
+			ChannelID:     cid,
+			Status:        status,
+			Kind:          "compare",
+			Context:       string(ctxJSON),
+			NextAttemptAt: &nextAt,
+		}
+		if err := d.Store.AddDelivery(ctx, d1); err != nil {
+			return err
+		}
+		d.emit(status)
+		slog.Debug("compare delivery enqueued", "follower", m.ID, "channel", cid, "event", event, "status", status)
 	}
 	return nil
 }

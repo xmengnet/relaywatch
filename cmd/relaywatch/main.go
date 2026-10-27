@@ -14,6 +14,7 @@ import (
 
 	"relaywatch/internal/auth"
 	"relaywatch/internal/check"
+	"relaywatch/internal/compare"
 	"relaywatch/internal/crypto"
 	httpapi "relaywatch/internal/http"
 	"relaywatch/internal/notifier"
@@ -103,30 +104,43 @@ func main() {
 		BaseDelay:   cfg.Notifications.Retry.BaseDelay,
 		MaxDelay:    cfg.Notifications.Retry.MaxDelay,
 	}
-	checker.OnChange = dispatcher.OnChange
-	worker := &notify.Worker{
-		Store:     st,
-		Notifiers: notifiers,
-	}
+		broker := httpapi.NewEventBroker()
+		checker.OnEvent = func(ev check.Event) {
+			broker.Broadcast("check.done", ev)
+		}
 
-	// 渠道测试发送 / 手动重发
-	testSender := notify.NewTestSender(notifiers)
-	resendOne := func(ctx context.Context, d *store.Delivery) error {
-		worker.ProcessForced(ctx, d)
-		return nil
-	}
+		evaluator := compare.NewEvaluator(st, dispatcher.EnqueueCompare)
+		checker.OnChange = dispatcher.OnChange
+		checker.OnChecked = evaluator.EvaluateOnChecked
+		worker := &notify.Worker{
+			Store:     st,
+			Notifiers: notifiers,
+			OnDelivery: func(status store.DeliveryStatus) {
+				broker.Broadcast("delivery.done", map[string]any{"status": status})
+			},
+		}
+		dispatcher.OnDelivery = worker.OnDelivery
 
-	srv := &httpapi.Server{
-		Auth:      authSvc,
-		OIDC:      oidcSvc,
-		Store:     st,
-		WebDist:   web.Dist(), // dev 构建标签下为 nil（前端走 Vite :5173）
-		Checker:   checker,
-		Registry:  registry,
-		Notifiers: notifiers,
-		TestSender: testSender,
-		ResendOne:  resendOne,
-	}
+		// 渠道测试发送 / 手动重发
+		testSender := notify.NewTestSender(notifiers)
+		resendOne := func(ctx context.Context, d *store.Delivery) error {
+			worker.ProcessForced(ctx, d)
+			return nil
+		}
+
+		srv := &httpapi.Server{
+			Auth:       authSvc,
+			OIDC:       oidcSvc,
+			Store:      st,
+			WebDist:    web.Dist(), // dev 构建标签下为 nil（前端走 Vite :5173）
+			Checker:    checker,
+			Registry:   registry,
+			Notifiers:  notifiers,
+			Evaluator:  evaluator,
+			Broker:     broker,
+			TestSender: testSender,
+			ResendOne:  resendOne,
+		}
 	if srv.WebDist == nil {
 		slog.Info("dev 构建：静态资源未嵌入，前端请访问 Vite dev server (:5173)")
 	}

@@ -71,7 +71,7 @@ func (s *GiteaReleaseSource) Meta() Meta {
 	return Meta{
 		Type:  s.Type(),
 		Label: "Gitea / Forgejo",
-		Icon:  "mdi-forge",
+		Icon:  "mdi-source-branch",
 		Fields: []FieldSpec{
 			{Key: "host", Label: "站点地址", Type: "string", Required: true, Placeholder: "https://gitea.example.com"},
 			{Key: "repo", Label: "仓库", Type: "string", Required: true, Placeholder: "owner/name"},

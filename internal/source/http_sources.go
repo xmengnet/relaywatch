@@ -3,9 +3,11 @@ package source
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // HTTPJSONSource http_json 源：任意 JSON 接口 + gjson 风格点路径提取。
@@ -194,6 +196,112 @@ func atoiSafe(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// ---------- http_header ----------
+
+// HTTPHeaderSource http_header 源：发送 HEAD 请求抓取响应头（如 Location 重定向）。
+type HTTPHeaderSource struct{}
+
+func (s *HTTPHeaderSource) Type() string { return "http_header" }
+
+func (s *HTTPHeaderSource) Meta() Meta {
+	return Meta{
+		Type:  s.Type(),
+		Label: "HTTP 响应头 (重定向)",
+		Icon:  "mdi-arrow-top-right-thick",
+		Fields: []FieldSpec{
+			{Key: "url", Label: "URL", Type: "string", Required: true, Placeholder: "https://github.com/owner/repo/releases/latest"},
+			{Key: "header", Label: "响应头字段", Type: "string", Default: "Location", Help: "默认 Location（常用于捕获 30x 跳转后的真实版本）"},
+			{Key: "regex", Label: "正则提取", Type: "string", Placeholder: `tag/(?:v)?([0-9.]+)`, Help: "可选，留空则取整个 Header 值"},
+			{Key: "group", Label: "捕获组", Type: "string", Help: "默认 1（当配置了正则且含括号组时）"},
+			{Key: "method", Label: "请求方法", Type: "select", Options: []string{"HEAD", "GET"}, Default: "HEAD"},
+			{Key: "headers", Label: "自定义请求头", Type: "string", Help: "格式: Key: Value; Key2: Value2"},
+		},
+	}
+}
+
+func (s *HTTPHeaderSource) Validate(cfg map[string]any) error {
+	if err := required(cfg, "url"); err != nil {
+		return err
+	}
+	if re := cfgString(cfg, "regex"); re != "" {
+		if _, err := regexp.Compile(re); err != nil {
+			return fmt.Errorf("regex 无效: %w", err)
+		}
+	}
+	if _, err := parseHeaders(cfgString(cfg, "headers")); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *HTTPHeaderSource) Fetch(ctx context.Context, cfg map[string]any) (*Result, error) {
+	u := cfgString(cfg, "url")
+	targetHeader := cfgString(cfg, "header")
+	if targetHeader == "" {
+		targetHeader = "Location"
+	}
+	method := strings.ToUpper(cfgString(cfg, "method"))
+	if method != http.MethodGet {
+		method = http.MethodHead
+	}
+	pattern := cfgString(cfg, "regex")
+	group := atoiSafe(cfgString(cfg, "group"), 1)
+	customHeaders, _ := parseHeaders(cfgString(cfg, "headers"))
+
+	req, err := http.NewRequestWithContext(ctx, method, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "RelayWatch/0.1 (header monitor)")
+	for k, v := range customHeaders {
+		req.Header.Set(k, v)
+	}
+
+	// 禁止自动重定向以捕获 Location 头
+	client := &http.Client{
+		Timeout: 20 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	val := resp.Header.Get(targetHeader)
+	if val == "" {
+		return nil, &NotFoundError{Msg: fmt.Sprintf("未在响应中获取到头部 %s (HTTP %d)", targetHeader, resp.StatusCode)}
+	}
+
+	ver := val
+	if pattern != "" {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("regex 无效: %w", err)
+		}
+		m := re.FindStringSubmatch(val)
+		if m == nil {
+			return nil, fmt.Errorf("响应头 %s 的值 %q 不匹配正则", targetHeader, val)
+		}
+		if len(m) > 1 {
+			if group >= len(m) {
+				return nil, fmt.Errorf("捕获组 %d 不存在（共 %d 组）", group, len(m)-1)
+			}
+			ver = m[group]
+		} else {
+			ver = m[0]
+		}
+	}
+
+	return &Result{
+		Version: ver,
+		URL:     u,
+	}, nil
 }
 
 // ---------- docker_tag ----------

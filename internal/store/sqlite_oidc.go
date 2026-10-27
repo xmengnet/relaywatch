@@ -16,19 +16,20 @@ type OIDCProvider struct {
 	ClientSecret string // 存库前已加密
 	Scopes       string
 	ClaimRules   string // JSON：{"email_domains":[...],"groups":{"claim":"groups","any_of":[...]}}
+	IconURL      string // 登录页按钮图标；空 = 按内置 name 映射
 	Enabled      bool
 	CreatedAt    time.Time
 }
 
 // ---------- OIDC Provider ----------
 
-const oidcProviderCols = `id, name, issuer, client_id, client_secret, scopes, claim_rules, enabled, created_at`
+const oidcProviderCols = `id, name, issuer, client_id, client_secret, scopes, claim_rules, icon_url, enabled, created_at`
 
 func (s *sqliteStore) oidcProviderFromRow(scan func(dest ...any) error) (*OIDCProvider, error) {
 	p := &OIDCProvider{}
 	var rules sql.NullString
 	var enabled int
-	err := scan(&p.ID, &p.Name, &p.Issuer, &p.ClientID, &p.ClientSecret, &p.Scopes, &rules, &enabled, &p.CreatedAt)
+	err := scan(&p.ID, &p.Name, &p.Issuer, &p.ClientID, &p.ClientSecret, &p.Scopes, &rules, &p.IconURL, &enabled, &p.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -43,9 +44,9 @@ func (s *sqliteStore) oidcProviderFromRow(scan func(dest ...any) error) (*OIDCPr
 
 func (s *sqliteStore) CreateOIDCProvider(ctx context.Context, p *OIDCProvider) error {
 	storedSecret := s.encField(p.ClientSecret)
-	res, err := s.db.exec(ctx, `INSERT INTO oidc_providers (name, issuer, client_id, client_secret, scopes, claim_rules, enabled, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.Issuer, p.ClientID, storedSecret, p.Scopes, nullString(p.ClaimRules), boolInt(p.Enabled), formatTime(time.Now()))
+	res, err := s.db.exec(ctx, `INSERT INTO oidc_providers (name, issuer, client_id, client_secret, scopes, claim_rules, icon_url, enabled, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Issuer, p.ClientID, storedSecret, p.Scopes, nullString(p.ClaimRules), p.IconURL, boolInt(p.Enabled), formatTime(time.Now()))
 	if err != nil {
 		return err
 	}
@@ -84,8 +85,8 @@ func (s *sqliteStore) OIDCProviderByName(ctx context.Context, name string) (*OID
 
 func (s *sqliteStore) UpdateOIDCProvider(ctx context.Context, p *OIDCProvider) error {
 	storedSecret := s.encField(p.ClientSecret)
-	_, err := s.db.exec(ctx, `UPDATE oidc_providers SET name = ?, issuer = ?, client_id = ?, client_secret = ?, scopes = ?, claim_rules = ?, enabled = ? WHERE id = ?`,
-		p.Name, p.Issuer, p.ClientID, storedSecret, p.Scopes, nullString(p.ClaimRules), boolInt(p.Enabled), p.ID)
+	_, err := s.db.exec(ctx, `UPDATE oidc_providers SET name = ?, issuer = ?, client_id = ?, client_secret = ?, scopes = ?, claim_rules = ?, icon_url = ?, enabled = ? WHERE id = ?`,
+		p.Name, p.Issuer, p.ClientID, storedSecret, p.Scopes, nullString(p.ClaimRules), p.IconURL, boolInt(p.Enabled), p.ID)
 	return err
 }
 

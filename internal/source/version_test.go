@@ -45,3 +45,26 @@ func TestNormalize(t *testing.T) {
 		}
 	}
 }
+
+func TestRewriteVersion(t *testing.T) {
+	cases := []struct {
+		raw, from, to, want string
+	}{
+		{"20261027", `(\d{4})(\d{2})(\d{2})`, `\1.\2.\3`, "2026.10.27"},
+		{"v1.2.3-release", `release`, `final`, "v1.2.3-final"},
+		{"abc-123", `abc-(\d+)`, `${1}`, "123"},
+		{"build_987", `build_(?P<num>\d+)`, `\g<num>`, "987"},
+		{"no-match", `^foo`, `bar`, "no-match"},
+		{"1.0.0", "", "something", "1.0.0"},
+	}
+	for _, c := range cases {
+		got, err := RewriteVersion(c.raw, c.from, c.to)
+		if err != nil {
+			t.Fatalf("RewriteVersion(%q, %q, %q) err: %v", c.raw, c.from, c.to, err)
+		}
+		if got != c.want {
+			t.Errorf("RewriteVersion(%q, %q, %q) = %q, want %q", c.raw, c.from, c.to, got, c.want)
+		}
+	}
+}
+

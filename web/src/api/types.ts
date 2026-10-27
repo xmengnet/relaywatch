@@ -17,6 +17,8 @@ export interface Monitor {
   version_suffix?: string
   version_include_regex?: string
   version_ignore_regex?: string
+  from_pattern?: string
+  to_pattern?: string
   interval_sec: number
   enabled: boolean
   state: MonitorState
@@ -30,6 +32,10 @@ export interface Monitor {
   tags: string[]
   note?: string
   channel_ids?: number[]
+  reference_monitor_id?: number | null
+  compare_state?: string
+  compare_ref_version?: string
+  compare_since?: string
   created_at: string
   updated_at: string
 }

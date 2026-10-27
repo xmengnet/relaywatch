@@ -36,6 +36,8 @@ type monitorResponse struct {
 	VersionSuffix       string   `json:"version_suffix,omitempty"`
 	VersionIncludeRegex string   `json:"version_include_regex,omitempty"`
 	VersionIgnoreRegex  string   `json:"version_ignore_regex,omitempty"`
+	FromPattern         string   `json:"from_pattern,omitempty"`
+	ToPattern           string   `json:"to_pattern,omitempty"`
 	IntervalSec         int      `json:"interval_sec"`
 	Enabled             bool     `json:"enabled"`
 	State               string   `json:"state"`
@@ -52,11 +54,22 @@ type monitorResponse struct {
 	ChannelIDs          []int64  `json:"channel_ids"`
 	CreatedAt           string   `json:"created_at"`
 	UpdatedAt           string   `json:"updated_at"`
+
+	// 双轨对比（M6）
+	ReferenceMonitorID *int64  `json:"reference_monitor_id,omitempty"`
+	CompareState       string  `json:"compare_state,omitempty"`
+	CompareRefVersion  string  `json:"compare_ref_version,omitempty"`
+	CompareSince       *string `json:"compare_since,omitempty"`
 }
 
 func toMonitorResponse(m *store.Monitor) *monitorResponse {
 	if m == nil {
 		return nil
+	}
+	var cmpSince *string
+	if m.CompareSince != nil {
+		s := m.CompareSince.Format(timeRFC3339)
+		cmpSince = &s
 	}
 	r := &monitorResponse{
 		ID:                  m.ID,
@@ -66,6 +79,8 @@ func toMonitorResponse(m *store.Monitor) *monitorResponse {
 		VersionSuffix:       m.VersionSuffix,
 		VersionIncludeRegex: m.VersionIncludeRegex,
 		VersionIgnoreRegex:  m.VersionIgnoreRegex,
+		FromPattern:         m.FromPattern,
+		ToPattern:           m.ToPattern,
 		IntervalSec:         m.IntervalSec,
 		Enabled:             m.Enabled,
 		State:               string(m.State),
@@ -79,6 +94,10 @@ func toMonitorResponse(m *store.Monitor) *monitorResponse {
 		ChannelIDs:          m.ChannelIDs,
 		CreatedAt:           m.CreatedAt.Format(timeRFC3339),
 		UpdatedAt:           m.UpdatedAt.Format(timeRFC3339),
+		ReferenceMonitorID:  m.ReferenceMonitorID,
+		CompareState:        m.CompareState,
+		CompareRefVersion:   m.CompareRefVersion,
+		CompareSince:        cmpSince,
 	}
 	if r.Tags == nil {
 		r.Tags = []string{}

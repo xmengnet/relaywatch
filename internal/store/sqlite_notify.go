@@ -88,11 +88,15 @@ func (s *sqliteStore) ChannelUsageCount(ctx context.Context, channelID int64) (i
 // ---------- 投递 ----------
 
 func (s *sqliteStore) AddDelivery(ctx context.Context, d *Delivery) error {
+	kind := d.Kind
+	if kind == "" {
+		kind = "update"
+	}
 	res, err := s.db.exec(ctx, `INSERT INTO deliveries
-		(monitor_id, channel_id, change_id, payload, status, attempts, next_attempt_at, last_error, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(monitor_id, channel_id, change_id, payload, status, attempts, next_attempt_at, last_error, kind, context, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.MonitorID, d.ChannelID, d.ChangeID, nullString(d.Payload), string(d.Status),
-		d.Attempts, nullTime(d.NextAttemptAt), nullString(d.LastError), formatTime(time.Now()))
+		d.Attempts, nullTime(d.NextAttemptAt), nullString(d.LastError), kind, nullString(d.Context), formatTime(time.Now()))
 	if err != nil {
 		return err
 	}
@@ -101,20 +105,24 @@ func (s *sqliteStore) AddDelivery(ctx context.Context, d *Delivery) error {
 }
 
 func (s *sqliteStore) UpdateDelivery(ctx context.Context, d *Delivery) error {
+	kind := d.Kind
+	if kind == "" {
+		kind = "update"
+	}
 	_, err := s.db.exec(ctx, `UPDATE deliveries SET
-		payload = ?, status = ?, attempts = ?, next_attempt_at = ?, last_error = ?, sent_at = ?
+		payload = ?, status = ?, attempts = ?, next_attempt_at = ?, last_error = ?, kind = ?, context = ?, sent_at = ?
 		WHERE id = ?`,
 		nullString(d.Payload), string(d.Status), d.Attempts, nullTime(d.NextAttemptAt),
-		nullString(d.LastError), nullTime(d.SentAt), d.ID)
+		nullString(d.LastError), kind, nullString(d.Context), nullTime(d.SentAt), d.ID)
 	return err
 }
 
-const deliveryCols = `id, monitor_id, channel_id, change_id, payload, status, attempts, next_attempt_at, last_error, created_at, sent_at`
+const deliveryCols = `id, monitor_id, channel_id, change_id, payload, status, attempts, next_attempt_at, last_error, kind, context, created_at, sent_at`
 
 func (s *sqliteStore) deliveryFromRow(scan func(dest ...any) error) (*Delivery, error) {
 	d := &Delivery{}
-	var changeID, payload, nextAt, lastErr, sentAt sql.NullString
-	err := scan(&d.ID, &d.MonitorID, &d.ChannelID, &changeID, &payload, &d.Status, &d.Attempts, &nextAt, &lastErr, &d.CreatedAt, &sentAt)
+	var changeID, payload, nextAt, lastErr, kind, contextJSON, sentAt sql.NullString
+	err := scan(&d.ID, &d.MonitorID, &d.ChannelID, &changeID, &payload, &d.Status, &d.Attempts, &nextAt, &lastErr, &kind, &contextJSON, &d.CreatedAt, &sentAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -123,6 +131,11 @@ func (s *sqliteStore) deliveryFromRow(scan func(dest ...any) error) (*Delivery, 
 	}
 	d.Payload = payload.String
 	d.LastError = lastErr.String
+	d.Kind = kind.String
+	if d.Kind == "" {
+		d.Kind = "update"
+	}
+	d.Context = contextJSON.String
 	if changeID.Valid && changeID.String != "" {
 		var id int64
 		if _, err := fmt.Sscanf(changeID.String, "%d", &id); err == nil {

@@ -1,8 +1,8 @@
 # RelayWatch 设计方案
 
-版本：0.3.0
-对应需求：[requirements.md](./requirements.md) v0.2.1
-实现进度：M1–M4 已完成（见 README「状态」），本文标注「实现注记」处为编码时确定的事实。
+版本：0.5.0
+对应需求：[requirements.md](./requirements.md) v0.3.1
+实现进度：M1–M6 全部完成（含双轨对比 §17 与 SSE 实时推送 §8.8），nvchecker 兼容源（§18 P0–P3 及正则重写）已实现并全量测试通过。
 
 变更：v0.1 → v0.2 根据评审意见修订，同步需求 v0.2：新增 api_tokens / settings 表、deliveries 调度字段、版本过滤与变更周期语义、调度抖动与 per-host 限速、nvchecker 导入、手动检查改为同步返回、CSP 修正、`relaywatch rekey` 子命令。
 
@@ -15,6 +15,16 @@ v0.2.1 → v0.3.0（实现期修订，与 M1–M4 代码同步）：
 - 手动重发增加 Force 语义：跳过开放变更校验（用户明确要求再发一次），版本号仍取发送时刻 latest_version
 - 认证中间件顺序实现为 `Recoverer → RealIP → 安全头 → Session/Bearer → RequireAuth → RequireCSRF`，API Token（Bearer）调用豁免 CSRF
 - HTTP 层一律经由脱敏视图（views.go）输出，密码哈希与内部字段不出 API
+
+v0.3.0 → v0.4.0（M6 规划增补）：
+- 新增 §17 双轨对比设计：放弃 §14.3 原提的 `group_key` 对称分组，改为跟随监控上的有向引用 `reference_monitor_id`；对比前按源类型做版本对齐（`aur` 剥离 pkgrel/epoch——实测 `0.1.19-1` 会被 semver 解析为预发布，不剥离将永远误报落后）；对比事件（进入落后 / 差距扩大 / 已追平）复用 deliveries 投递管线（新增 `kind` / `context` 列）
+- §3.1 表结构、§7.3 API、§12 测试策略、§14.3 扩展方向、§16 风险相应标注；SSE（§8.8）与 §17 同为 M6 范围
+
+v0.4.0 → v0.5.0（M7 nvchecker 全面兼容与扩展源设计增补）：
+- 新增 §18 nvchecker 全面兼容与监控源扩展设计：全面对标 nvchecker 官方 44 种 source，建立分类矩阵、参数映射表、导入器增强规范与分批实施路线（P0–P3）；
+- 核心提取流水线增强：新增 `from_pattern`/`to_pattern` 正则重写、候选多版本统一排序挑选（`PickBestVersion`）；
+- 提炼 nvchecker 源码成熟避坑实践：涵盖 OCI V2 认证探针、GitHub 限流重试与 GraphQL 查询、Maven XML 坐标定位、Yanked/Prerelease 过滤；
+- 确立 Web 多用户环境下的安全与跨平台规范：对 `cmd` 实行严格的配置禁用与管理员准入，对本地 `pacman`/`alpm` 数据库通过官方 REST API 进行透明代换。
 
 ## 1. 技术选型
 
@@ -207,6 +217,7 @@ CREATE TABLE oidc_providers (
     client_secret TEXT NOT NULL,          -- 加密存储
     scopes        TEXT NOT NULL DEFAULT 'openid email profile',
     claim_rules   TEXT,                   -- JSON：登录限制规则
+    icon_url      TEXT NOT NULL DEFAULT '', -- 登录页按钮图标；空 = 按内置 name 映射（0003 迁移新增）
     enabled       INTEGER NOT NULL DEFAULT 1,
     created_at    DATETIME NOT NULL
 );
@@ -325,6 +336,8 @@ CREATE TABLE settings (
     updated_at DATETIME NOT NULL
 );
 ```
+
+上表为 M1–M5 已实现的结构；M6 双轨对比的增量列（`monitors.reference_monitor_id`、`compare_*`，`deliveries.kind`/`context`）见 §17.1。
 
 ### 3.2 设计要点
 
@@ -752,6 +765,8 @@ err := bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(pw))
 | GET | `/api/v1/events` | SSE，推送检查/投递事件 |
 | GET | `/healthz` | 健康检查（无需认证） |
 | GET | `/metrics` | Prometheus 指标（可选） |
+
+M6 双轨对比不新增端点：`monitors` 资源增加 `reference_monitor_id` / `compare_state` 等字段与 `?compare=lagging` 筛选，`stats` 增加落后计数，`deliveries` 记录带 `kind`（见 §17.6）。
 
 ### 7.4 源类型元数据
 
@@ -2011,6 +2026,7 @@ Delivery worker（每 2s）
 | 调度器 | 注入假时钟，测到期判断、抖动范围、防重入、per-host 限速 |
 | 认证 | 本地登录、会话过期、CSRF 校验、OIDC 用假 IdP、API Token 创建/使用/吊销 |
 | 导入器 | nvchecker keyfile 各源类型映射、未知字段告警、非法条目报错不中断 |
+| 对比与对齐（M6） | 表驱动：对齐规则（pkgrel/epoch/双侧 aur/无后缀）、关系函数、事件迁移矩阵；评估器用临时 SQLite 验证入队去重、故障跳过、参照删除清理 |
 | HTTP 层 | `httptest` 端到端，覆盖鉴权矩阵（admin/viewer/未登录） |
 | 集成 | 临时 SQLite 文件，跑完整检查+投递流程 |
 
@@ -2135,7 +2151,7 @@ location /api/v1/events {
 
 ### 14.3 未来可扩展方向
 
-- **上游 vs 本地双轨对比**（v2 候选，需求文档 §5）：`monitors` 加 `group_key`，同组内上游源与发行版源（AUR/Arch）的版本并列展示并计算落后差
+- **上游 vs 本地双轨对比**：已规划为 §17（M6，需求 §3.8）。原提的 `group_key` 对称分组方案已改为跟随监控上的有向引用 `reference_monitor_id`，理由见 §17.1
 - 多用户数据隔离（给 `monitors` 加 `owner_id`）
 - PostgreSQL 支持（实现 `store.Store` 的另一套）
 - 自动更新 PKGBUILD（AUR 维护者场景）
@@ -2198,3 +2214,393 @@ location /api/v1/events {
 | SSE 被反代缓冲 | 实时更新失效 | 文档给出 Nginx `proxy_buffering off`；前端 3 次失败后降级轮询；手动检查不依赖 SSE |
 | 加密密钥丢失 | 敏感配置无法解密 | 文档强调备份 `secret_key`；轮换用 `old_secret_key` 过渡 + `relaywatch rekey` 重加密 |
 | 单实例架构 | 无法水平扩展 | v1 明确非目标；1000 条监控单实例足够 |
+| 对比的 pkgrel 启发式对齐在极端上游版本（自身以 `-数字` 结尾）下可能误判 | 误报「一致」而漏提醒 | 对齐只对 `aur` 源类型生效、参照侧不剥离；影响限于对比提醒，不改变两侧监控自身的状态机与通知 |
+| 上游发版 + 对比落后产生双通知（两监控绑同一渠道时） | 通知噪音 | 落后通知按事件去重（进入落后、差距扩大各一次）；跟随监控 `notify_cooldown_sec` 可节流；文档说明 |
+
+## 17. 双轨对比设计（M6 规划）
+
+对应需求 §3.8。把同一软件的上游发布源与本地/发行版源关联，检测「我的包落后了吗」，在落后出现、差距扩大、追平时提醒。本节为 M6 规划，尚未实现；与 M1–M5 已实现代码的衔接处逐一标注。
+
+### 17.1 数据模型
+
+§14.3 原提的 `group_key` 对称分组方案不采用：对比关系本质有向（谁落后于谁），对称分组需要额外 `role` 列或按源类型猜测基准，而「AUR 包 vs Arch 官方仓库」这类对比两边都是发行版源，启发式就会失效。改为**跟随监控上的显式有向引用**：
+
+- 一条监控最多一个参照；参照自身不得有参照（depth-1，校验在 HTTP 层，环在结构上不可能出现）
+- 一个参照可被多条监控引用（`foo`、`foo-bin`、`foo-git` 同源）
+- 删除参照：`ON DELETE SET NULL` 自动解除关联；同时清空引用方的 `compare_*` 并作废其待投递的对比通知
+
+迁移 0003（全部默认值安全，存量行零影响）：
+
+```sql
+ALTER TABLE monitors ADD COLUMN reference_monitor_id INTEGER REFERENCES monitors(id) ON DELETE SET NULL;
+ALTER TABLE monitors ADD COLUMN compare_state TEXT NOT NULL DEFAULT '';        -- '' | in_sync | lagging | ahead
+ALTER TABLE monitors ADD COLUMN compare_ref_version TEXT NOT NULL DEFAULT '';  -- 参照方 latest 快照（列表展示）
+ALTER TABLE monitors ADD COLUMN compare_since DATETIME;                        -- 进入当前对比状态的时间
+ALTER TABLE monitors ADD COLUMN compare_notified_ref TEXT NOT NULL DEFAULT ''; -- 上次落后通知时的参照版本（差距扩大去重）
+CREATE INDEX idx_monitors_reference ON monitors(reference_monitor_id);
+
+ALTER TABLE deliveries ADD COLUMN kind TEXT NOT NULL DEFAULT 'update';         -- update | compare（默认值保证存量行为不变）
+ALTER TABLE deliveries ADD COLUMN context TEXT;                                -- JSON 事件快照，compare 用
+```
+
+对比状态存在跟随监控侧；`compare_*` 是对比路径的派生态，与监控自身状态机（`state`）互不影响。
+
+### 17.2 版本对齐（关键实现点）
+
+实测：`source.CompareVersions` 对三段式版本走 semver 路径，而 `0.1.19-1` 是合法 semver（`-1` 被解析为预发布），于是：
+
+| 比较 | 现有结果 | 期望 |
+|---|---|---|
+| `0.1.19-1` vs `0.1.19` | -1（落后） | 0（一致） |
+| `0.2.20-2` vs `0.2.20` | -1（落后） | 0（一致，仅 pkgrel rebuild） |
+| `1.2.3-2` vs `1.2.3-1` | 1（领先） | 0（同上游版本不同 pkgrel） |
+
+不处理则 AUR 对比场景会持续误报。因此对比前引入对齐层（`internal/compare` 内的规则表，按源类型）：
+
+| 源类型 | 对齐规则 |
+|---|---|
+| `aur` | 剥离前导 epoch（`^\d+:`）与尾部 pkgrel（`-\d+$`） |
+| 其他 | 原样 |
+
+两侧各自应用自己的规则（AUR vs AUR 也正确；参照侧为 AUR 时同样剥离）。刻意**不做**通用的「剥离一切 `-数字` 结尾」：上游版本合法地以 `-1` 结尾时（少见），通用剥离会把真实差异误判为一致——误报落后只是吵，误报一致会漏掉更新。
+
+### 17.3 对比关系与通知事件
+
+关系由纯函数得出（便于表驱动测试）：
+
+```go
+cmp := source.CompareVersions(align(follower.LatestVersion, follower.SourceType),
+                              align(ref.LatestVersion,      ref.SourceType))
+// cmp < 0 → lagging ；== 0 → in_sync ；> 0 → ahead
+```
+
+事件与迁移（沿用既有「系统告警同一故障事件只提醒一次」的哲学：低频、可解释）：
+
+| 事件 | 条件 | 去重依据 |
+|---|---|---|
+| `entered_lagging` | 已知状态 → `lagging`（含刚配置参照即发现落后） | `compare_state` 变化本身 |
+| `gap_grew` | 保持 `lagging` 且参照版本 ≠ `compare_notified_ref` | `compare_notified_ref` |
+| `caught_up` | `lagging` → `in_sync` | `compare_state` 变化本身 |
+
+- 任一侧 `error`/`missing`/无版本（或参照已解除）→ **跳过评估、保持原状态**，避免「落后 → 上游故障 → 恢复」误报一次「追平」
+- `ahead`、未配置 → `in_sync` 等迁移不通知
+- 落后类事件发出后，`compare_notified_ref` 更新为当时的参照版本
+
+### 17.4 评估器与触发点
+
+新包 `internal/compare`（`Evaluator{Store, Enqueue}`）；`Checker` 增加第三个钩子（现有两个为 `OnEvent`/`OnChange`）：
+
+```go
+// Checker 每次检查完成后调用（覆盖调度器、批量、手动全部入口）
+OnChecked func(ctx context.Context, m *store.Monitor, out Outcome)
+```
+
+```text
+Checker.Check 成功落库
+   └→ OnChecked(m)
+        ├─ m 自身有参照        → 评估 pair(m 与其参照)
+        └─ m 是被引用的参照     → 对每个 follower 评估 pair(follower, m)
+
+评估 pair：重新加载两侧最新数据
+   ├─ 任一侧不可用 → 跳过（保持原状态）
+   ├─ 对齐 + 比较 → newState
+   ├─ newState != follower.compare_state（或落后且参照版本变化）→ 事件入队
+   │     （notify.Dispatcher.EnqueueCompare，复用静默期/退避/历史）
+   └─ 更新 compare_state / compare_ref_version / compare_since / compare_notified_ref
+         （专用部分更新 UpdateMonitorCompare，防止整行覆盖并发写，
+           与 UpdateMonitorCheckResult 同理）
+```
+
+并发：两侧检查可能同时完成、同时评估同一 pair——按跟随监控 ID 加内存互斥（同 `scheduler.running` / `HostLimiter` 模式），配合「状态已更新则不重复入队」做到确定性防重。
+
+补充触发点：
+
+- 保存监控时参照关系变化 → 立即评估一次（配置后即刻看到对比结果，不等下次检查）
+- 删除参照监控 → 清空 followers 的 `compare_*`、作废其待投递对比通知（`CancelOpenDeliveries` 扩展 kind 维度或新增对应方法）
+
+### 17.5 投递与消息
+
+复用 deliveries：对比通知插入 `kind='compare'` 记录，由现有 worker 消费（退避重试、静默期 deferred、历史、手动重发全部沿用）。
+
+- **渠道**：跟随监控绑定的渠道；未绑定则不发送（UI 给提示，不自动回落系统告警渠道，避免稀释「系统告警」语义）
+- **消息**：`TemplateData` 扩展 `Compare{RefMonitorName, RefVersion, FollowerVersion, State}`，默认模板与自定义模板同机制；标题形如「RelayWatch：AUR foo 落后于上游」
+- **worker 分支**：`kind='compare'` 的补发前校验 = 「事件是否仍成立」——`entered_lagging`/`gap_grew` 要求当前仍 `lagging`、`caught_up` 要求当前 `in_sync`，且跟随监控 enabled、参照关系仍在；不成立 → `canceled`（原因写 `last_error`，供通知历史展示）
+- **手动重发（Force）**：跳过事件校验，按**当前**对比状态渲染（与 update 重发「版本取发送时刻 latest」一致）
+
+### 17.6 API 与前端
+
+不新增端点，只在既有资源上加字段与筛选：
+
+| 位置 | 增量 |
+|---|---|
+| `monitorResponse` / `monitorPayload` | `reference_monitor_id`；响应增加 `compare_state` / `compare_ref_version` / `compare_since` |
+| `GET /api/v1/monitors` | `?compare=lagging\|in_sync\|ahead` 筛选 |
+| `GET /api/v1/stats` | 增加 `lagging` 计数 |
+| `GET /api/v1/deliveries` | 记录含 `kind`，可按类型筛选 |
+
+前端：
+
+- 监控编辑页：「上游参照」下拉（候选 = `reference_monitor_id` 为空且非自身的监控）+ 说明文案
+- 监控列表：「对比」列（落后/一致/领先 chip，落后时展示两侧版本）+「仅看落后」筛选
+- 监控详情：状态卡增加对比块（参照监控名可点击跳转、两侧版本复用 `VersionDiff`、落后时长）
+- 仪表盘：「落后」计数卡片；「需要关注」包含 `lagging` 的跟随监控
+- i18n：zh-Hans / en 新增文案
+
+### 17.7 测试策略
+
+| 层次 | 方式 |
+|---|---|
+| 对齐与关系 | 表驱动：`0.1.19-1` / epoch / 双侧 aur / 无 pkgrel / 非 semver 回退 |
+| 事件迁移 | 状态 × 事件矩阵：进入落后、差距扩大去重、追平、故障跳过、ahead 不通知 |
+| 评估器 | 临时 SQLite：入队一次且重复评估不重复；参照删除清理与作废；并发去重 |
+| HTTP | `?compare=` 筛选、参照校验矩阵（自身 / 不存在 / 目标已有参照） |
+
+### 17.8 明确不做
+
+- 链式对比（AUR → Arch 官方 → GitHub 的多级传播）
+- 「落后 N 个版本」计数（需历史推导，收益低）
+- 组管理页面（组视图 = 按参照筛选 followers，列表筛选够用）
+- 通用 `-数字` 剥离（只按源类型对齐，见 §17.2）
+
+## 18. nvchecker 全面兼容与监控源扩展设计（M7 规划）
+
+### 18.1 背景与目标
+
+[nvchecker](https://github.com/lilydjwg/nvchecker) 作为 Linux 打包（尤其是 Arch Linux 生态）和开源版本跟踪领域的标杆，经历了十余年演进，内置了 44 种成熟稳定的监控源，涵盖了各种边界情况与上游 API 变更陷阱。
+
+RelayWatch 在 M1–M5 阶段实现了 13 种最核心的监控源。为了让用户能够**无痛从 nvchecker 迁移并保证导入的 keyfile TOML 100% 可用**，RelayWatch 规划在 M7 阶段实现对 nvchecker 全量源的深度兼容与对齐。
+
+#### 44 种源全量对齐矩阵
+
+| 分类 | nvchecker 官方源（44 种） | RelayWatch 目标源类型 | 支持状态与演进规划 |
+|---|---|---|---|
+| **代码托管** | `github` | `github_release`, `github_tag` | 已支持，补充 `use_release_name`、GraphQL 聚合支持 |
+| | `gitlab` | `gitlab_release`, `gitlab_tag` | `gitlab_release` 已支持，规划增加 tag 模式 |
+| | `gitea` | `gitea_release`, `gitea_tag` | `gitea_release` 已支持，规划增加 tag 模式 |
+| | `bitbucket` | `bitbucket` | 规划 P1：支持 tags/commits 检查 |
+| | `pagure` | `pagure` | 规划 P1：支持 tags 检查 |
+| **通用 VCS** | `git`, `git_dulwich`, `git_pygit2` | `git_tag` | **规划 P1**：远程 `git ls-remote --tags`，免 API 限制通杀所有自建 Git |
+| | `mercurial` | `hg_tag` | 规划 P3：极少见，按需实现 |
+| **语言包管理器** | `pypi` | `pypi` | 已支持（自动过滤 yanked 版本） |
+| | `npm` | `npm` | 已支持（支持 dist_tag，默认 latest） |
+| | `cratesio` | `crates` | 已支持（已注入合规 User-Agent） |
+| | `go` | `go_module` | 已支持（通过 proxy.golang.org 查询 @latest） |
+| | `gems` | `rubygems` | **规划 P0**：RubyGems API，自动过滤预发布/撤回版本 |
+| | `maven` | `maven` | **规划 P0**：支持 Central 及自建 Maven 仓库 `maven-metadata.xml` |
+| | `packagist` | `packagist` | **规划 P0**：PHP Composer API，排除 `dev-*` 分支并按发布排序 |
+| | `cpan` | `cpan` | 规划 P2：MetaCPAN 快速 API |
+| | `cran` | `cran` | 规划 P2：R CRAN 官方包库索引 |
+| | `hackage` | `hackage` | 规划 P2：Haskell Hackage preferred.json |
+| | `opam` | `opam` | 规划 P2：OCaml OPAM 仓库索引 |
+| **版本聚合平台** | `repology` | `repology` | **规划 P0**：Repology REST API，极高价值（跨发行版版本对比基准） |
+| | `anitya` | `anitya` | **规划 P0**：release-monitoring.org 开源上游追踪 API |
+| **发行版与仓库** | `aur` | `aur` | 已支持（AUR RPC v5） |
+| | `archpkg` | `arch_official` | 已支持（Arch 官方 packages REST API） |
+| | `debianpkg` | `debianpkg` | 规划 P2：sources.debian.org API，支持 suite 筛选与 `strip_release` |
+| | `ubuntupkg` | `ubuntupkg` | 规划 P2：Launchpad API，支持 suite 筛选与 `strip_release` |
+| | `apt` | `apt_repo` | 规划 P2：直接解析远程 InRelease/Release/Packages.xz |
+| | `rpmrepo` | `rpm_repo` | 规划 P2：直接解析远程 repomd.xml/primary.xml.gz |
+| | `pacman`, `alpm`, `alpmfiles` | `arch_official`（自动转换） | **环境适配**：避免容器无 pacman 数据库问题，导入时智能代换为 `arch_official` |
+| **通用网络提取** | `regex` | `http_regex` | 已支持（支持正则组匹配） |
+| | `jq` | `http_json` | 已支持（点路径查找，规划增强标准 jq/gjson 语法） |
+| | `httpheader` | `http_header` | **规划 P1**：HEAD 请求捕获 Location 重定向或特定响应头 |
+| | `htmlparser` | `html_xpath` | **规划 P1**：XPath / HTML 节点选择器解析，弥补正则无法解析复杂 HTML |
+| **容器镜像** | `container` | `docker_tag` / `container` | **规划 P2**：升级为标准 OCI Registry V2 规范（支持 ghcr.io, quay.io, k8s） |
+| **生态与应用市场** | `vsmarketplace` | `vsmarketplace` | 规划 P3：VS Code 扩展市场查询 API |
+| | `openvsx` | `openvsx` | 规划 P3：Open VSX 市场 API |
+| | `snapcraft` | `snapcraft` | 规划 P3：Canonical Snap 市场 API |
+| | `android_sdk` | `android_sdk` | 规划 P3：Google Android SDK XML 索引 |
+| | `sparkle` | `sparkle` | 规划 P3：macOS Sparkle Appcast XML feed 检查 |
+| **系统与受控源** | `manual` | `manual` | 规划 P3：静态手动版本，用于挂起人肉确认 |
+| | `cmd` | `cmd` | 规划 P3：**严格受控**，默认全局禁用防 RCE，仅支持独立配置开启 |
+| | `combiner` | `combiner` | 规划 P3：多监控版本合成（依托双轨对比体系实现） |
+| | `none`, `launchpad` | 忽略或转特定源 | 自动识别并给出平滑处理 |
+
+---
+
+### 18.2 版本提取与规范化流水线升级
+
+nvchecker 的强大不仅在于源多，还在于其高度统一的版本提取、候选过滤与规范化流水线。RelayWatch 将扩展现有版本处理机制，全面对齐 nvchecker 的处理流程：
+
+```
+上游返回 (原始版本/候选列表)
+           │
+           ▼
+1. 候选多版本过滤 (apply_list_options)
+   ├── include_regex 正则包含过滤
+   ├── ignore_regex 正则排除过滤
+   └── ignored 显式跳过黑名单列表
+           │
+           ▼
+2. 最优版本选取 (SortAndPickBest)
+   ├── semver 排序优先
+   ├── vercmp (Arch 语义) 回退
+   └── 降级字符串/字典序
+           │
+           ▼
+3. 版本重写与规范化 (substitute_version)
+   ├── prefix / suffix 剥离 (如 'v' 前缀)
+   └── from_pattern -> to_pattern 正则替换重写
+           │
+           ▼
+最终标准版本 (入库、状态机比较、触发通知)
+```
+
+#### 关键增强点：
+1. **多候选统一排序机制 (`SortAndPickBest`)**：
+   - 现存源（如 `github_tag`、`docker_tag`）各自手写循环选最大版本。
+   - 升级为：源允许返回多条候选版本 `[]string`，由核心调用统一的 `SortAndPickBest` 函数，结合全局配置的 `version_include_regex`、`version_ignore_regex`、`ignored`，并按 semver/分段逻辑统一挑选最高版本。
+2. **正则重写 (`from_pattern` / `to_pattern`)**：
+   - 在 `monitors` 表增设 `from_pattern` 与 `to_pattern` 字段。
+   - 在版本完成剥离前缀后，执行 `re.ReplaceAllString(ver, to_pattern)`，支持把上游非标准日期（如 `20261027`）或混合 tag（如 `release-1.2.3`）转换为标准语义版本。
+3. **显式版本黑名单 (`ignored`)**：
+   - 支持配置特定跳过的版本列表（如上游已知崩溃的某个破损版本 `1.0.4 1.0.4.1`），避免即使没有新版本也反复报警。
+
+---
+
+### 18.3 分批扩展演进路线（P0 – P3）
+
+为稳步推进，44 种源将按照**「用户需求频次 × 实现成本 × 外部依赖」**分为四个批次交付：
+
+#### P0：高频上游聚合与主流语言包管理器
+核心聚焦 AUR 打包者与微服务开发者的刚需，零新增外部重型依赖，通过标准 HTTP JSON/XML 完成：
+- **`repology`**：
+  - URL：`https://repology.org/api/v1/project/{project}`
+  - 参数：`project`（必填）、`repo`（必填，如 `arch` / `debian_unstable` / `aur`）、`subrepo`（可选）
+  - 价值：AUR 维护者通过一条配置即可知晓上游发行版是否有新版本打包。
+- **`anitya`**：
+  - URL：`https://release-monitoring.org/api/project/{id}`
+  - 参数：`project_id` 或 `project_name`
+  - 价值：Fedora/RedHat 官方主导的全球开源软件版本元数据库。
+- **`rubygems`**：
+  - URL：`https://rubygems.org/api/v1/versions/{name}.json`
+  - 参数：`gem`（必填）
+- **`maven`**：
+  - URL：`{repo}/{group_path}/{artifact}/maven-metadata.xml`（默认 Central `https://repo1.maven.org/maven2`）
+  - 参数：`group`（必填）、`artifact`（必填）、`repo`（可选，支持自建 Nexus/Artifactory）
+  - XML 解析：提取 `<versioning><release>`，无则降级 `<versioning><latest>`。
+- **`packagist`**：
+  - URL：`https://packagist.org/packages/{name}.json`
+  - 参数：`package`（必填，如 `monolog/monolog`）
+
+#### P1：通用 VCS 与高级网络提取
+彻底打破对 GitHub/GitLab 平台 REST API 的依赖，通杀任意 Git 与复杂网页：
+- **`git_tag` (通用 Git 源)**：
+  - 参数：`url`（支持 https/git）、`branch`（可选，查 commit）、`use_commit`（布尔值）
+  - 实现策略：利用纯 Go 的 `github.com/go-git/go-git/v5`（或受限调用本地无副作用命令 `git ls-remote --tags --refs {url}`），直接拉取远端 ref 列表，无需克隆完整仓库，内存消耗极低。
+- **`http_header`**：
+  - 参数：`url`、`header`（默认 `Location`）、`regex`、`group`
+  - 请求使用 `HEAD` 方法，禁止跟随 30x 重定向，从响应头抓取真实跳转目标（完美契合形如 `.../releases/latest` 的自动化版本捕获）。
+- **`htmlparser`**：
+  - 参数：`url`、`xpath`、`headers`
+  - 采用轻量 HTML XPath 库（`github.com/antchfx/htmlquery`）提取节点内容，解决单行正则表达式无法解析复杂多行 HTML 的痛点。
+- **`bitbucket` & `pagure`**：实现其官方 REST API 适配。
+
+#### P2：标准 OCI 容器与 Linux 跨发行版生态
+- **`container` (OCI Registry V2)**：
+  - 按照标准 OCI 分发规范重构当前仅限 Docker Hub 的 `docker_tag`：
+    1. 请求 `https://{host}/v2/` 触发 401，解析响应头 `WWW-Authenticate: Bearer realm="...",service="..."`；
+    2. 向 realm 发起 OAuth2 Token 申请，附带 `scope=repository:{image}:pull`；
+    3. 携带 Bearer Token 访问 `https://{host}/v2/{image}/tags/list`；
+    4. 分页提取所有 tag 并做版本比较。
+  - 成果：原生覆盖 Docker Hub、`ghcr.io` (GitHub Packages)、`quay.io`、`registry.k8s.io` 以及私有 Harbor 仓库。
+- **`debianpkg` & `ubuntupkg`**：对接 Debian Sources API 及 Launchpad REST API。
+- **`apt_repo` & `rpm_repo`**：解析远程发行版仓库元数据（`InRelease` / `repomd.xml`）。
+- **`cpan`, `cran`, `hackage`, `opam`**：补全小众语言包管理器。
+
+#### P3：扩展应用市场、系统与特殊源
+- **`vsmarketplace` & `openvsx`**：VS Code 与开源插件生态。
+- **`manual`**：静态版本，支持手动触发状态确认。
+- **`combiner`**：多监控版本合成器。
+- **`cmd`**：本地脚本受控执行源（见下文安全设计）。
+
+---
+
+### 18.4 借鉴 nvchecker 源码的避坑指南
+
+通过研读 nvchecker 源码，提炼出以下在实现各渠道时至关重要的成熟经验：
+
+1. **GitHub 限流与退避处理** (`.tmp-nvchecker/nvchecker_source/github.py`)：
+   - GitHub 对匿名请求限制为 60次/小时，带 token 为 5000次/小时；
+   - 遇到 HTTP 403/429 时，nvchecker 会读取 `X-RateLimit-Reset` 或 `Retry-After` 头，在并发层挂起对应 host 的请求队列（`ALLOW_REQUEST.clear()`），休眠到重置时间后统一唤醒重试，避免直接判定为 check error 或雪崩重试。RelayWatch 的 `scheduler/ratelimit.go` 应集成该动态退避能力。
+   - `use_latest_release` vs `use_release_name`：部分仓库 tag 为内部编号（如 `build-1234`），而 release name 为真实版本（如 `1.5.0`），需要支持提取 `release.name` 作为版本号。
+2. **OCI 容器鉴权兼容陷阱** (`.tmp-nvchecker/nvchecker_source/container.py`)：
+   - 规范上要求 `WWW-Authenticate` 必须返回 `service` 参数；
+   - 但实测 **GitHub 容器镜像服务 (`ghcr.io`)** 在返回的 401 响应头中**不包含** `service` 字段！因此鉴权解析器必须允许 `service` 为空，在申请 token 时仅传入 `scope`，否则监控 ghcr.io 镜像将全量报错。
+3. **Maven Central 路径构建规则** (`.tmp-nvchecker/nvchecker_source/maven.py`)：
+   - `group_id` 必须将所有 `.` 转换为 `/`（例如 `org.apache.commons` 转换为 `org/apache/commons`）；
+   - 文件路径严格为 `{group_path}/{artifact_id}/maven-metadata.xml`；
+   - 提取版本时，必须优先取 `<versioning><release>`，当 `<release>` 节点不存在时（通常在非完全遵循规范的私服中），再回退读取 `<versioning><latest>`。
+4. **包管理器 Yanked / Prerelease 过滤**：
+   - **PyPI / Crates.io / RubyGems**：上游开发者撤回（yanked）的版本仍存在于历史列表中，必须排除，否则会将一个已作废的破损版本错误地上报为最新版。
+   - **Packagist**：必须过滤以 `dev-` 开头的分支标签，并按 release 时间排序。
+5. **合规自定义 User-Agent**：
+   - Crates.io 和 MetaCPAN 会对默认的 Go-http-client 或空 UA 封锁或限流，所有 HTTP 请求必须附带符合规范的 UA（如 `RelayWatch/0.5.0 (https://github.com/xmengnet/relaywatch)`）。
+
+---
+
+### 18.5 安全设计与跨平台环境适配
+
+由于 nvchecker 是本地单机 CLI，而 RelayWatch 是支持多用户、具有 Web 界面并常以 Docker 容器化运行的服务，因此在设计特殊源时必须保持最高等级的安全性：
+
+#### 1. `cmd` 监控源安全准入与隔离
+- **风险**：nvchecker 允许配置 `source = "cmd"` 执行任意 shell 脚本。在 RelayWatch 中，若允许用户在 Web 端或导入 nvchecker 配置时直接执行任意 shell 命令，将构成高危的远程代码执行（RCE）漏洞。
+- **设计策略**：
+  - **默认全局禁用**：服务默认关闭 `cmd` 监控源。仅当服务端配置文件显式指定 `security.enable_cmd_source: true` 时才允许加载；
+  - **权限管控**：仅系统管理员（`role = "admin"`）有权限创建或保存包含 `cmd` 源的监控；
+  - **nvchecker 导入保护**：从 nvchecker TOML 导入时，如果系统未开启 `enable_cmd_source`，导入器必须拦截所有 `source = "cmd"` 的条目，将其标记在 `Ignored` 告警中，并提示：“出于安全考虑，已跳过本地 shell 命令条目，建议改用 HTTP/Git 等安全源”；
+  - **执行隔离**：若管理员开启该源，执行进程必须受限于严格的超时时间（默认 30s），不得继承敏感环境变量（如 `RELAYWATCH_SECRET_KEY`、数据库密码），并记录审计日志。
+
+#### 2. `pacman` / `alpm` 本地源透明代换
+- **痛点**：nvchecker 的 `pacman` 依赖本地 `pacman -Si` 命令，`alpm` 依赖调用本地 `/var/lib/pacman` 数据库。而在容器化（如官方 Docker 镜像基于 Alpine 或 Debian）或跨平台运行 RelayWatch 时，宿主机根本没有 Arch Linux 或 libalpm。
+- **解决策略**：
+  - 在导入 nvchecker 配置时，导入器将 `source = "pacman"` 和 `source = "alpm"` **无缝自动映射为 RelayWatch 的 `arch_official` 源**；
+  - 参数直接映射（如 `alpm = "foo"` 转换为 `pkgname = "foo"`，`repo` 保持一致，`strip_release` 保留）；
+  - 这样用户导入现有的 Arch 打包 nvchecker 配置文件时，既保留了 100% 的业务检测语义，又无需在运行环境安装 Arch 依赖包或挂载本地 pacman 数据库。
+
+---
+
+### 18.6 nvchecker 导入器全量升级规范
+
+`internal/importer/nvchecker.go` 将从当前的有限映射，升级为完备的双向兼容转换器：
+
+| nvchecker TOML 字段 | 对应 RelayWatch 字段 / 源类型 | 转换处理细节 |
+|---|---|---|
+| `source = "github"` | `github_release` / `github_tag` | 包含 `use_latest_release=true` 映射为 `github_release`；其余映射为 `github_tag`；保留 `use_release_name`、`include_prereleases` |
+| `source = "gitlab"` | `gitlab_release` | 提取 `host`、`project` |
+| `source = "gitea"` | `gitea_release` | 提取 `host`、`repo` |
+| `source = "bitbucket"` | `bitbucket` | 提取 `repo`、`branch`、`use_max_tag` |
+| `source = "pagure"` | `pagure` | 提取 `repo` |
+| `source = "git"` / `git_dulwich` / `git_pygit2` | `git_tag` | 提取 `url`、`branch`、`use_commit` |
+| `source = "aur"` | `aur` | 提取 `pkgname` |
+| `source = "archpkg"` | `arch_official` | 提取 `pkgname`、`repo` |
+| `source = "pacman"` / `alpm` | `arch_official` | 智能透明代换，提取 `pkgname`，记录优化日志 |
+| `source = "pypi"` | `pypi` | 提取 `project` |
+| `source = "npm"` | `npm` | 提取 `package`、`dist_tag` |
+| `source = "cratesio"` | `crates` | 提取 `crate` |
+| `source = "go"` / `goproxy` | `go_module` | 提取 `module` |
+| `source = "gems"` | `rubygems` | 提取 `gem` |
+| `source = "maven"` | `maven` | 提取 `group`、`artifact`、`repo` |
+| `source = "packagist"` | `packagist` | 提取 `package` |
+| `source = "cpan"` | `cpan` | 提取 `cpan` |
+| `source = "cran"` | `cran` | 提取 `cran` |
+| `source = "hackage"` | `hackage` | 提取 `hackage` |
+| `source = "repology"` | `repology` | 提取 `project`、`repo`、`subrepo` |
+| `source = "anitya"` | `anitya` | 提取 `project_id` |
+| `source = "debianpkg"` | `debianpkg` | 提取 `pkgname`、`suite`、`strip_release` |
+| `source = "ubuntupkg"` | `ubuntupkg` | 提取 `pkgname`、`suite`、`strip_release` |
+| `source = "regex"` | `http_regex` | 提取 `url`、`regex` |
+| `source = "httpheader"` | `http_header` | 提取 `url`、`header`、`regex` |
+| `source = "htmlparser"` | `html_xpath` | 提取 `url`、`xpath` |
+| `source = "jq"` | `http_json` | 提取 `url`、`filter` (转换为 path) |
+| `source = "container"` | `container` / `docker_tag` | 提取 `image`、`registry`、`tag_regex` |
+| `source = "vsmarketplace"` | `vsmarketplace` | 提取 `extension` |
+| `source = "openvsx"` | `openvsx` | 提取 `extension` |
+| `source = "snapcraft"` | `snapcraft` | 提取 `snap` |
+| `source = "manual"` | `manual` | 提取 `manual` 静态版本值 |
+| `source = "cmd"` | `cmd` | 仅在系统开启时导入，否则安全拦截告警 |
+| `from_pattern` + `to_pattern` | `from_pattern` + `to_pattern` | 映射入库，由规范化流水线执行正则替换 |
+| `ignored` | `version_ignored` | 空格分隔列表映射 |
+| `include_regex` / `exclude_regex` | `version_include_regex` / `version_ignore_regex` | 直接映射 |
+| `prefix` | `version_prefix` | 直接映射 |
+

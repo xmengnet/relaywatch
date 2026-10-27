@@ -22,6 +22,8 @@ type Checker struct {
 	OnEvent func(Event)
 	// OnChange 可选：检测到需要投递的版本变更时回调（notify.Dispatcher.OnChange）。
 	OnChange func(ctx context.Context, monitor *store.Monitor, change *store.VersionChange, notify bool)
+	// OnChecked 每次检查成功落库后调用（双轨对比评估用）。
+	OnChecked func(ctx context.Context, monitor *store.Monitor)
 }
 
 // Event 检查完成事件（SSE 推送用）。
@@ -71,6 +73,13 @@ func (c *Checker) Check(ctx context.Context, m *store.Monitor) Outcome {
 
 	raw := res.Version
 	version := source.Normalize(raw, m.VersionPrefix, m.VersionSuffix)
+	if m.FromPattern != "" {
+		rewritten, err := source.RewriteVersion(version, m.FromPattern, m.ToPattern)
+		if err != nil {
+			return c.fail(ctx, m, start, "from_pattern 正则重写失败: "+err.Error(), false)
+		}
+		version = rewritten
+	}
 	if version == "" {
 		return c.fail(ctx, m, start, fmt.Sprintf("源返回空版本（原始 %q）", raw), false)
 	}
@@ -152,16 +161,20 @@ func (c *Checker) Check(ctx context.Context, m *store.Monitor) Outcome {
 	if err := c.Store.UpdateMonitorCheckResult(ctx, m.ID, cr); err != nil {
 		slog.Error("update monitor result", "monitor", m.ID, "err", err)
 	}
-	_ = c.Store.AddCheckHistory(ctx, &store.CheckHistory{
-		MonitorID:  m.ID,
-		CheckedAt:  now,
-		DurationMS: out.DurationMS,
-		OK:         true,
-		Version:    version,
-	})
+		_ = c.Store.AddCheckHistory(ctx, &store.CheckHistory{
+			MonitorID:  m.ID,
+			CheckedAt:  now,
+			DurationMS: out.DurationMS,
+			OK:         true,
+			Version:    version,
+		})
 
-	c.emit(m.ID, out)
-	return out
+		if c.OnChecked != nil {
+			c.OnChecked(ctx, m)
+		}
+
+		c.emit(m.ID, out)
+		return out
 }
 
 func (c *Checker) fail(ctx context.Context, m *store.Monitor, start time.Time, msg string, notFound bool) Outcome {

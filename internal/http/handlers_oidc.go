@@ -25,9 +25,17 @@ func (h *OIDCHandler) routesPublic(r chi.Router) {
 }
 
 func (h *OIDCHandler) routesAdmin(r chiRouterIface) {
+	r.With(auth.RequireAdmin).Get("/auth/providers/{id}", h.getOne)
+	r.With(auth.RequireAdmin).Get("/auth/oidc/callback-url", h.callbackBase)
 	r.Post("/auth/providers", h.create)
 	r.Patch("/auth/providers/{id}", h.update)
 	r.Delete("/auth/providers/{id}", h.remove)
+}
+
+// callbackBase GET /auth/oidc/callback-url（admin）：回调地址的 base_url 部分，
+// 前端拼 /auth/oidc/{name}/callback 展示给用户配置 IdP。
+func (h *OIDCHandler) callbackBase(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"base_url": h.Svc.BaseURL})
 }
 
 // begin GET /auth/oidc/{name} → 302 到 IdP。
@@ -77,10 +85,32 @@ func (h *OIDCHandler) list(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]any{}
 	for _, p := range providers {
 		if p.Enabled {
-			out = append(out, map[string]any{"name": p.Name})
+			out = append(out, map[string]any{"name": p.Name, "icon_url": p.IconURL})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+// getOne GET /auth/providers/{id}（admin）：编辑表单用的完整信息（secret 不返回）。
+func (h *OIDCHandler) getOne(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	prov, err := h.St.GetOIDCProvider(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "Provider 不存在")
+		return
+	}
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": prov.ID, "name": prov.Name, "issuer": prov.Issuer,
+		"client_id": prov.ClientID, "scopes": prov.Scopes,
+		"claim_rules": prov.ClaimRules, "icon_url": prov.IconURL, "enabled": prov.Enabled,
+	})
 }
 
 type providerPayload struct {
@@ -90,6 +120,7 @@ type providerPayload struct {
 	ClientSecret json.RawMessage `json:"client_secret"` // PATCH 时可省略 = 不改
 	Scopes       string          `json:"scopes"`
 	ClaimRules   string          `json:"claim_rules"`
+	IconURL      string          `json:"icon_url"`
 	Enabled      *bool           `json:"enabled"`
 }
 
@@ -136,6 +167,7 @@ func (h *OIDCHandler) create(w http.ResponseWriter, r *http.Request) {
 		ClientSecret: sec,
 		Scopes:       scopes,
 		ClaimRules:   p.ClaimRules,
+		IconURL:      strings.TrimSpace(p.IconURL),
 		Enabled:      enabled,
 	}
 	if err := h.St.CreateOIDCProvider(r.Context(), prov); err != nil {
@@ -187,6 +219,7 @@ func (h *OIDCHandler) update(w http.ResponseWriter, r *http.Request) {
 		prov.Scopes = p.Scopes
 	}
 	prov.ClaimRules = p.ClaimRules
+	prov.IconURL = strings.TrimSpace(p.IconURL)
 	if p.Enabled != nil {
 		prov.Enabled = *p.Enabled
 	}

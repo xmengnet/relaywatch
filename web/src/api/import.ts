@@ -7,6 +7,8 @@ export interface ImportPreviewItem {
   version_prefix?: string
   include_regex?: string
   ignore_regex?: string
+  from_pattern?: string
+  to_pattern?: string
   valid: boolean
   error?: string
 }
@@ -45,11 +47,19 @@ export interface OIDCProviderInfo {
   name: string
   issuer?: string
   client_id?: string
+  scopes?: string
+  claim_rules?: string
+  icon_url?: string
   enabled?: boolean
 }
 
 export function listOIDCProviders() {
   return apiFetch<{ items: OIDCProviderInfo[] }>('/auth/providers')
+}
+
+// admin：单个 Provider 完整信息（编辑表单用，secret 不返回）
+export function getOIDCProvider(id: number) {
+  return apiFetch<OIDCProviderInfo>(`/auth/providers/${id}`)
 }
 
 export function createOIDCProvider(p: Record<string, unknown>) {
@@ -62,4 +72,9 @@ export function updateOIDCProvider(id: number, p: Record<string, unknown>) {
 
 export function deleteOIDCProvider(id: number) {
   return apiFetch<void>(`/auth/providers/${id}`, { method: 'DELETE' })
+}
+
+// admin：OIDC 回调地址的 base_url（来自 server.base_url 配置）
+export function getOIDCCallbackBase() {
+  return apiFetch<{ base_url: string }>('/auth/oidc/callback-url')
 }

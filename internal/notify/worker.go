@@ -99,36 +99,48 @@ func (w *Worker) processOne(ctx context.Context, d *store.Delivery) {
 		return
 	}
 
-	// 补发前校验（deferred 记录四项校验，pending 立即投递也校验前两项）
-	if !m.Enabled {
-		w.cancel(ctx, d, "monitor disabled")
-		return
-	}
-	if d.Status == store.DeliveryDeferred {
-		if m.State != store.StateHasUpdate {
-			w.cancel(ctx, d, "monitor no longer has_update")
+		// 补发前校验（deferred 记录四项校验，pending 立即投递也校验前两项）
+		if !m.Enabled {
+			w.cancel(ctx, d, "monitor disabled")
 			return
 		}
-		if d.ChangeID != nil {
-			open, err := w.Store.OpenVersionChange(ctx, m.ID)
-			if err != nil || open == nil || open.ID != *d.ChangeID {
-				w.cancel(ctx, d, "change cycle superseded")
+		if !ch.Enabled {
+			w.cancel(ctx, d, "channel disabled")
+			return
+		}
+
+		var msg *notifier.Message
+		if d.Kind == "compare" {
+			// 双轨对比校验
+			if m.ReferenceMonitorID == nil {
+				w.cancel(ctx, d, "reference removed")
+				return
+			}
+			msg = w.buildCompareMessage(ctx, m, ch, d, d.Force)
+			if msg == nil {
+				w.cancel(ctx, d, "compare condition no longer holds")
+				return
+			}
+		} else {
+			if d.Status == store.DeliveryDeferred {
+				if m.State != store.StateHasUpdate {
+					w.cancel(ctx, d, "monitor no longer has_update")
+					return
+				}
+				if d.ChangeID != nil {
+					open, err := w.Store.OpenVersionChange(ctx, m.ID)
+					if err != nil || open == nil || open.ID != *d.ChangeID {
+						w.cancel(ctx, d, "change cycle superseded")
+						return
+					}
+				}
+			}
+			msg = w.buildMessage(ctx, m, ch, d, d.Force)
+			if msg == nil {
+				w.cancel(ctx, d, "no open change to deliver")
 				return
 			}
 		}
-	}
-	if !ch.Enabled {
-		w.cancel(ctx, d, "channel disabled")
-		return
-	}
-
-	// 组消息：版本号取发送时刻的 latest_version（补发不投过时版本）。
-	// 手动重发（Force=true）跳过开放变更校验：用户明确要求再发一次。
-	msg := w.buildMessage(ctx, m, ch, d, d.Force)
-	if msg == nil {
-		w.cancel(ctx, d, "no open change to deliver")
-		return
-	}
 
 	// 发送
 	n, ok := w.Notifiers.Get(ch.Type)
@@ -232,12 +244,67 @@ func (w *Worker) buildMessage(ctx context.Context, m *store.Monitor, ch *store.C
 		slog.Error("render template", "err", err)
 		body = fmt.Sprintf("%s: %s → %s", m.Name, oldVersion, newVersion)
 	}
+		return &notifier.Message{
+			Title:    title,
+			Body:     body,
+			Markdown: true,
+			Monitor:  data.Monitor,
+			Change:   data.Change,
+		}
+	}
+
+func (w *Worker) buildCompareMessage(ctx context.Context, m *store.Monitor, ch *store.Channel, d *store.Delivery, force bool) *notifier.Message {
+	if m.ReferenceMonitorID == nil {
+		return nil
+	}
+	ref, err := w.Store.GetMonitor(ctx, *m.ReferenceMonitorID)
+	if err != nil {
+		return nil
+	}
+
+	var cmpCtx CompareContext
+	if d.Context != "" {
+		_ = json.Unmarshal([]byte(d.Context), &cmpCtx)
+	}
+
+	// 常规投递校验事件是否仍成立（Force 手动重发跳过）
+	if !force {
+		switch cmpCtx.Event {
+		case "entered_lagging", "gap_grew":
+			if m.CompareState != "lagging" {
+				return nil
+			}
+		case "caught_up":
+			if m.CompareState != "in_sync" {
+				return nil
+			}
+		}
+	}
+
+	data := notifier.TemplateData{
+		Monitor: notifier.MonitorInfo{
+			Name:       m.Name,
+			SourceType: m.SourceType,
+			Tags:       m.Tags,
+		},
+		Compare: notifier.CompareInfo{
+			RefMonitorName:  ref.Name,
+			RefVersion:      ref.LatestVersion,
+			FollowerVersion: m.LatestVersion,
+			State:           m.CompareState,
+			Event:           cmpCtx.Event,
+		},
+	}
+	title, body, err := notifier.RenderCompare("", ch.Template, data, true)
+	if err != nil {
+		slog.Error("render compare template", "err", err)
+		body = fmt.Sprintf("%s（%s）对比 %s（%s）：%s", m.Name, m.LatestVersion, ref.Name, ref.LatestVersion, m.CompareState)
+	}
 	return &notifier.Message{
 		Title:    title,
 		Body:     body,
 		Markdown: true,
 		Monitor:  data.Monitor,
-		Change:   data.Change,
 	}
 }
 

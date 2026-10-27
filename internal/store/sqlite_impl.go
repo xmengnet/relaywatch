@@ -216,22 +216,25 @@ func (s *sqliteStore) TouchAPIToken(ctx context.Context, id int64) error {
 // ---------- 监控 ----------
 
 const monitorCols = `id, name, source_type, source_config, version_prefix, version_suffix,
-	version_include_regex, version_ignore_regex, interval_sec, enabled, state,
+	version_include_regex, version_ignore_regex, from_pattern, to_pattern, interval_sec, enabled, state,
 	current_version, latest_version, last_checked_at, last_success_at, last_change_at,
 	last_error, consecutive_failures, notify_cooldown_sec, last_notified_at,
-	tags, note, created_at, updated_at`
+	tags, note, created_at, updated_at, reference_monitor_id, compare_state, compare_ref_version, compare_since, compare_notified_ref`
 
 func (s *sqliteStore) monitorFromRow(scan func(dest ...any) error) (*Monitor, error) {
 	m := &Monitor{}
-	var prefix, suffix, incRe, ignRe, current, latest, lastErr, tags, note sql.NullString
+	var prefix, suffix, incRe, ignRe, fromPat, toPat, current, latest, lastErr, tags, note sql.NullString
 	var enabled int
 	var lastChecked, lastSuccess, lastChange, lastNotified sql.NullString
 	var state string
+	var refID sql.NullInt64
+	var cmpState, cmpRefVer, cmpSince, cmpNotifiedRef sql.NullString
 	err := scan(&m.ID, &m.Name, &m.SourceType, &m.SourceConfig, &prefix, &suffix,
-		&incRe, &ignRe, &m.IntervalSec, &enabled, &state,
+		&incRe, &ignRe, &fromPat, &toPat, &m.IntervalSec, &enabled, &state,
 		&current, &latest, &lastChecked, &lastSuccess, &lastChange,
 		&lastErr, &m.ConsecutiveFailures, &m.NotifyCooldownSec, &lastNotified,
-		&tags, &note, &m.CreatedAt, &m.UpdatedAt)
+		&tags, &note, &m.CreatedAt, &m.UpdatedAt,
+		&refID, &cmpState, &cmpRefVer, &cmpSince, &cmpNotifiedRef)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -242,6 +245,8 @@ func (s *sqliteStore) monitorFromRow(scan func(dest ...any) error) (*Monitor, er
 	m.VersionSuffix = suffix.String
 	m.VersionIncludeRegex = incRe.String
 	m.VersionIgnoreRegex = ignRe.String
+	m.FromPattern = fromPat.String
+	m.ToPattern = toPat.String
 	m.Enabled = enabled != 0
 	m.State = MonitorState(state)
 	m.SourceConfig = s.decField(m.SourceConfig)
@@ -249,6 +254,18 @@ func (s *sqliteStore) monitorFromRow(scan func(dest ...any) error) (*Monitor, er
 	m.LatestVersion = latest.String
 	m.LastError = lastErr.String
 	m.Note = note.String
+	if refID.Valid {
+		idVal := refID.Int64
+		m.ReferenceMonitorID = &idVal
+	}
+	m.CompareState = cmpState.String
+	m.CompareRefVersion = cmpRefVer.String
+	m.CompareNotifiedRef = cmpNotifiedRef.String
+	if cmpSince.Valid && cmpSince.String != "" {
+		if t, err := time.Parse(time.RFC3339Nano, cmpSince.String); err == nil {
+			m.CompareSince = &t
+		}
+	}
 	for _, p := range []*sql.NullString{&lastChecked, &lastSuccess, &lastChange, &lastNotified} {
 		if p.Valid && p.String != "" {
 			if t, err := time.Parse(time.RFC3339Nano, p.String); err == nil {
@@ -277,13 +294,14 @@ func (s *sqliteStore) CreateMonitor(ctx context.Context, m *Monitor) error {
 	storedConfig := s.encField(m.SourceConfig)
 	res, err := s.db.exec(ctx, `INSERT INTO monitors
 		(name, source_type, source_config, version_prefix, version_suffix,
-		 version_include_regex, version_ignore_regex, interval_sec, enabled, state,
-		 current_version, latest_version, notify_cooldown_sec, tags, note, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 version_include_regex, version_ignore_regex, from_pattern, to_pattern, interval_sec, enabled, state,
+		 current_version, latest_version, notify_cooldown_sec, tags, note, reference_monitor_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.Name, m.SourceType, storedConfig, nullString(m.VersionPrefix), nullString(m.VersionSuffix),
-		nullString(m.VersionIncludeRegex), nullString(m.VersionIgnoreRegex), m.IntervalSec, boolInt(m.Enabled), string(m.State),
+		nullString(m.VersionIncludeRegex), nullString(m.VersionIgnoreRegex), nullString(m.FromPattern), nullString(m.ToPattern),
+		m.IntervalSec, boolInt(m.Enabled), string(m.State),
 		nullString(m.CurrentVersion), nullString(m.LatestVersion), m.NotifyCooldownSec, string(tagsJSON), nullString(m.Note),
-		formatTime(now), formatTime(now))
+		m.ReferenceMonitorID, formatTime(now), formatTime(now))
 	if err != nil {
 		return err
 	}
@@ -331,6 +349,10 @@ func (s *sqliteStore) ListMonitors(ctx context.Context, f MonitorFilter) ([]*Mon
 	if f.State != "" {
 		where = append(where, "state = ?")
 		args = append(args, string(f.State))
+	}
+	if f.CompareState != "" {
+		where = append(where, "compare_state = ?")
+		args = append(args, f.CompareState)
 	}
 	if f.Search != "" {
 		where = append(where, "(name LIKE ? OR source_config LIKE ?)")
@@ -408,22 +430,57 @@ func (s *sqliteStore) ListMonitors(ctx context.Context, f MonitorFilter) ([]*Mon
 	return out, total, nil
 }
 
-func (s *sqliteStore) UpdateMonitor(ctx context.Context, m *Monitor) error {
-	tagsJSON, _ := json.Marshal(m.Tags)
-	storedConfig := s.encField(m.SourceConfig)
-	_, err := s.db.exec(ctx, `UPDATE monitors SET
-		name = ?, source_type = ?, source_config = ?, version_prefix = ?, version_suffix = ?,
-		version_include_regex = ?, version_ignore_regex = ?, interval_sec = ?, enabled = ?, state = ?,
-		current_version = ?, latest_version = ?, notify_cooldown_sec = ?, tags = ?, note = ?, updated_at = ?
-		WHERE id = ?`,
-		m.Name, m.SourceType, storedConfig, nullString(m.VersionPrefix), nullString(m.VersionSuffix),
-		nullString(m.VersionIncludeRegex), nullString(m.VersionIgnoreRegex), m.IntervalSec, boolInt(m.Enabled), string(m.State),
-		nullString(m.CurrentVersion), nullString(m.LatestVersion), m.NotifyCooldownSec, string(tagsJSON), nullString(m.Note),
-		formatTime(time.Now()), m.ID)
-	if err != nil {
-		return err
+	func (s *sqliteStore) UpdateMonitor(ctx context.Context, m *Monitor) error {
+		tagsJSON, _ := json.Marshal(m.Tags)
+		storedConfig := s.encField(m.SourceConfig)
+		_, err := s.db.exec(ctx, `UPDATE monitors SET
+			name = ?, source_type = ?, source_config = ?, version_prefix = ?, version_suffix = ?,
+			version_include_regex = ?, version_ignore_regex = ?, from_pattern = ?, to_pattern = ?,
+			interval_sec = ?, enabled = ?, state = ?,
+			current_version = ?, latest_version = ?, notify_cooldown_sec = ?, tags = ?, note = ?,
+			reference_monitor_id = ?, updated_at = ?
+			WHERE id = ?`,
+			m.Name, m.SourceType, storedConfig, nullString(m.VersionPrefix), nullString(m.VersionSuffix),
+			nullString(m.VersionIncludeRegex), nullString(m.VersionIgnoreRegex), nullString(m.FromPattern), nullString(m.ToPattern),
+			m.IntervalSec, boolInt(m.Enabled), string(m.State),
+			nullString(m.CurrentVersion), nullString(m.LatestVersion), m.NotifyCooldownSec, string(tagsJSON), nullString(m.Note),
+			m.ReferenceMonitorID, formatTime(time.Now()), m.ID)
+		if err != nil {
+			return err
+		}
+		return s.SetMonitorChannels(ctx, m.ID, m.ChannelIDs)
 	}
-	return s.SetMonitorChannels(ctx, m.ID, m.ChannelIDs)
+
+func (s *sqliteStore) UpdateMonitorCompare(ctx context.Context, id int64, compareState, compareRefVersion string, compareSince *time.Time, compareNotifiedRef string) error {
+	_, err := s.db.exec(ctx, `UPDATE monitors SET
+		compare_state = ?, compare_ref_version = ?, compare_since = ?, compare_notified_ref = ?, updated_at = ?
+		WHERE id = ?`,
+		compareState, compareRefVersion, nullTime(compareSince), compareNotifiedRef, formatTime(time.Now()), id)
+	return err
+}
+
+func (s *sqliteStore) ListFollowerMonitors(ctx context.Context, refMonitorID int64) ([]*Monitor, error) {
+	rows, err := s.db.query(ctx, `SELECT `+monitorCols+` FROM monitors WHERE reference_monitor_id = ?`, refMonitorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Monitor
+	for rows.Next() {
+		m, err := s.monitorFromRow(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *sqliteStore) ClearFollowerReferences(ctx context.Context, refMonitorID int64) error {
+	_, err := s.db.exec(ctx, `UPDATE monitors SET
+		reference_monitor_id = NULL, compare_state = '', compare_ref_version = '', compare_since = NULL, compare_notified_ref = '', updated_at = ?
+		WHERE reference_monitor_id = ?`, formatTime(time.Now()), refMonitorID)
+	return err
 }
 
 func (s *sqliteStore) DeleteMonitor(ctx context.Context, id int64) error {

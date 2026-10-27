@@ -21,12 +21,15 @@ export interface MonitorPayload {
   version_suffix?: string
   version_include_regex?: string
   version_ignore_regex?: string
+  from_pattern?: string
+  to_pattern?: string
   interval_sec: number
   enabled?: boolean
   notify_cooldown_sec?: number
   tags?: string[]
   note?: string
   channel_ids?: number[]
+  reference_monitor_id?: number | null
 }
 
 export function createMonitor(p: MonitorPayload) {

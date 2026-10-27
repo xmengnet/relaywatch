@@ -75,6 +75,10 @@ type Store interface {
 
 	// 检查结果落库（Checker 用）
 	UpdateMonitorCheckResult(ctx context.Context, id int64, p CheckResult) error
+	// 双轨对比（M6）
+	UpdateMonitorCompare(ctx context.Context, id int64, compareState, compareRefVersion string, compareSince *time.Time, compareNotifiedRef string) error
+	ListFollowerMonitors(ctx context.Context, refMonitorID int64) ([]*Monitor, error)
+	ClearFollowerReferences(ctx context.Context, refMonitorID int64) error
 
 	// 渠道
 	CreateChannel(ctx context.Context, c *Channel) error
