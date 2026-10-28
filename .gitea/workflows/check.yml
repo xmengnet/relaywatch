@@ -1,0 +1,85 @@
+name: Check
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  commit-messages:
+    name: Validate commit messages
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit message subjects
+        shell: bash
+        run: ./scripts/check-commit-messages.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+
+  quality:
+    name: Go quality and tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run quality gates
+        run: ./scripts/check-go-quality.sh
+
+      - name: Run tests
+        run: go test -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+      - name: Check for vulnerabilities
+        run: go tool govulncheck ./...
+
+      # -tags dev 跳过 go:embed，无需先构建前端即可验证主程序编译；
+      # 完整构建（含嵌入前端）由 frontend job 与 release.yml 覆盖
+      - name: Verify build
+        run: go build -tags dev -trimpath -ldflags="-s -w" -o /tmp/relaywatch-build-check ./cmd/relaywatch
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "12.15.0"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        working-directory: web
+        run: pnpm test
+
+      - name: Build
+        working-directory: web
+        run: pnpm build

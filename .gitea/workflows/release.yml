@@ -1,0 +1,178 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "12.15.0"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y zstd
+
+      - name: Build frontend (go:embed 打包进二进制)
+        run: |
+          cd web
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Build Linux amd64
+        run: CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.release=${{ github.ref_name }}" -o relaywatch-linux-amd64 ./cmd/relaywatch
+
+      - name: Build Linux arm64
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags="-s -w -X main.release=${{ github.ref_name }}" -o relaywatch-linux-arm64 ./cmd/relaywatch
+
+      - name: Package Arch Linux
+        run: |
+          VERSION="${{ github.ref_name }}"
+          # pacman 的 pkgver 不允许连字符/空白：v1.0.0-rc1 这类 tag 不能直接做 pkgver
+          PKGVER="${VERSION#v}"
+          if [[ ! "$PKGVER" =~ ^[0-9A-Za-z._+]+$ ]]; then
+            echo "tag ${VERSION} 无法转换为 Arch pkgver（仅允许字母数字与 . _ +），请改用 v1.0.0 形式的 tag" >&2
+            exit 1
+          fi
+          PKGROOT="relaywatch-arch-pkg"
+          mkdir -p "${PKGROOT}/usr/bin"
+          mkdir -p "${PKGROOT}/etc/relaywatch"
+          mkdir -p "${PKGROOT}/usr/lib/systemd/system"
+          mkdir -p "${PKGROOT}/usr/lib/sysusers.d"
+          mkdir -p "${PKGROOT}/usr/lib/tmpfiles.d"
+          mkdir -p "${PKGROOT}/usr/share/doc/relaywatch"
+
+          cp relaywatch-linux-amd64 "${PKGROOT}/usr/bin/relaywatch"
+          cp packaging/arch/config.yaml "${PKGROOT}/etc/relaywatch/config.yaml"
+          cp packaging/arch/env "${PKGROOT}/etc/relaywatch/env"
+          chmod 600 "${PKGROOT}/etc/relaywatch/env"
+          cp packaging/arch/relaywatch.service "${PKGROOT}/usr/lib/systemd/system/relaywatch.service"
+          cp packaging/arch/relaywatch.sysusers "${PKGROOT}/usr/lib/sysusers.d/relaywatch.conf"
+          cp packaging/arch/relaywatch.tmpfiles "${PKGROOT}/usr/lib/tmpfiles.d/relaywatch.conf"
+          cp README.md "${PKGROOT}/usr/share/doc/relaywatch/README.md"
+
+          cat > "${PKGROOT}/.PKGINFO" << PKGEOF
+          pkgname = relaywatch
+          pkgver = ${PKGVER}-1
+          pkgdesc = Self-hosted version update monitoring service
+          url = https://git.liyp.cc/xmengnet/relaywatch
+          packager = liyp <my@liyp.cc>
+          arch = x86_64
+          depend = ca-certificates
+          depend = tzdata
+          backup = etc/relaywatch/config.yaml
+          backup = etc/relaywatch/env
+          PKGEOF
+
+          cd "${PKGROOT}"
+          SIZE=$(find .PKGINFO etc usr -type f -printf '%s\n' | awk '{s+=$1} END {print s}')
+          echo "size = ${SIZE}" >> .PKGINFO
+          tar -c --zstd -f "../relaywatch-${PKGVER}-1-x86_64.pkg.tar.zst" .PKGINFO etc usr
+          cd ..
+          rm -rf "${PKGROOT}"
+
+      - name: Upload Arch Package
+        uses: ChristopherHX/gitea-upload-artifact@v4
+        with:
+          name: relaywatch-arch-x86_64
+          path: |
+            relaywatch-*-x86_64.pkg.tar.zst
+
+      - name: Upload Linux amd64
+        uses: ChristopherHX/gitea-upload-artifact@v4
+        with:
+          name: relaywatch-linux-amd64
+          path: |
+            relaywatch-linux-amd64
+
+      - name: Upload Linux arm64
+        uses: ChristopherHX/gitea-upload-artifact@v4
+        with:
+          name: relaywatch-linux-arm64
+          path: |
+            relaywatch-linux-arm64
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: ChristopherHX/gitea-download-artifact@v4
+        with:
+          path: artifacts
+
+      # ${VERSION#v} 是 bash 语法，只在 run 的 shell 里求值；
+      # body 直接传给 release action，必须先用表达式算好再插入
+      - name: Compute version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: https://gitea.com/actions/gitea-release-action@v1
+        with:
+          tag: ${{ github.ref_name }}
+          title: RelayWatch ${{ github.ref_name }}
+          body: |
+            ## RelayWatch ${{ github.ref_name }}
+
+            ### 下载
+
+            | 平台 | 架构 | 下载链接 |
+            |------|------|----------|
+            | Linux | amd64 | [relaywatch-linux-amd64](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/relaywatch-linux-amd64) |
+            | Linux | arm64 | [relaywatch-linux-arm64](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/relaywatch-linux-arm64) |
+            | Linux (Arch) | x86_64 | [relaywatch-${{ steps.ver.outputs.version }}-1-x86_64.pkg.tar.zst](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/relaywatch-${{ steps.ver.outputs.version }}-1-x86_64.pkg.tar.zst) |
+
+            ### 快速使用
+
+            ```bash
+            # Linux（二进制，前端已内嵌，运行时零依赖）
+            chmod +x relaywatch-linux-amd64
+            ./relaywatch-linux-amd64 -version
+
+            # 首次部署：cp config.example.yaml config.yaml 并填 security.secret_key
+            ./relaywatch-linux-amd64 -config config.yaml
+
+            # Arch Linux
+            sudo pacman -U relaywatch-${{ steps.ver.outputs.version }}-1-x86_64.pkg.tar.zst
+            openssl rand -base64 32   # 写入 /etc/relaywatch/env 的 RELAYWATCH_SECRET_KEY
+            sudo systemctl enable --now relaywatch
+            ```
+
+            完整部署说明（Docker / systemd / 反向代理 / 备份）见仓库 `docs/deploy.md`。
+          files: |
+            artifacts/**/*
+            !artifacts/**/.*

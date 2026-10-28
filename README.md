@@ -81,6 +81,29 @@ cd web && pnpm dev                   # 终端 2（:5173，API 代理到 8080）
 
 **已知版本约束**：vue-tsc 3.3.13 与 TypeScript 7 不兼容（`ERR_PACKAGE_PATH_NOT_EXPORTED`），前端固定使用 TypeScript 5.9。
 
+## CI/CD 与质量门禁
+
+CI 基于 Gitea Actions（`.gitea/workflows/`）：
+
+- **check.yml** — push / PR 时自动执行：
+  - Go 质量门禁（`scripts/check-go-quality.sh`）：gofmt、禁止生产代码使用 `interface{}`、`go vet`、`staticcheck`（带 `.lint-baseline/` 基线棘轮，只拦截新增告警）、`deadcode -test`（测试引用的辅助方法不算死代码）
+  - `go test -race` 带覆盖率
+  - `govulncheck` 依赖漏洞扫描
+  - `go build -tags dev` 编译验证（含嵌入前端的完整构建由 release 与 Dockerfile 覆盖）
+  - 前端 `pnpm install --frozen-lockfile` + `pnpm test` + `pnpm build`（pnpm 版本由 `web/package.json` 的 `packageManager` 固定）
+  - PR 提交信息校验（`type: subject` / `type(scope): subject` 规范，见 `scripts/check-commit-messages.sh`）
+- **release.yml** — 打 `v*` tag 时构建 Linux amd64 / arm64 二进制与 Arch Linux 包并创建 Release；版本号经 `-X main.release=<tag>` 注入（`relaywatch -version` 可查）
+
+本地开发可运行与 CI 相同的门禁：
+
+```bash
+make lint        # gofmt / interface{} / go vet / staticcheck / deadcode
+make check-vuln  # govulncheck 漏洞扫描
+make quality     # lint + 竞态测试 + 漏洞扫描
+```
+
+staticcheck / deadcode / govulncheck 通过 go.mod 的 `tool` 指令声明，`go tool <name>` 自动下载对应版本，无需手动安装。Arch 包也可本地构建：`cd packaging/arch && makepkg -si`。
+
 ## 技术栈
 
 **后端**：Go 1.27+ / chi v5 / modernc.org/sqlite（纯 Go，无 cgo）

@@ -1,0 +1,56 @@
+# Maintainer: liyp <my@liyp.cc>
+pkgname=relaywatch
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Self-hosted version update monitoring service"
+arch=('x86_64' 'aarch64')
+url="https://git.liyp.cc/xmengnet/relaywatch"
+depends=('ca-certificates' 'tzdata')
+makedepends=('go' 'nodejs' 'pnpm' 'git')
+backup=('etc/relaywatch/config.yaml' 'etc/relaywatch/env')
+source=("git+${url}.git#tag=v${pkgver}")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "${srcdir}/${pkgname}"
+
+    # 构建前端；pnpm 版本由 web/package.json 的 packageManager 字段固定
+    # （Arch 官方 pnpm 包当前即为该版本；版本不符时 pnpm 会按 packageManager 自动切换）
+    cd web
+    pnpm install --frozen-lockfile
+    pnpm build
+    cd ..
+}
+
+build() {
+    cd "${srcdir}/${pkgname}"
+
+    # 纯 Go（含 SQLite），无 cgo，可静态链接
+    export CGO_ENABLED=0
+
+    go build -trimpath -ldflags="-s -w -X main.release=v${pkgver}" -o relaywatch ./cmd/relaywatch
+}
+
+check() {
+    cd "${srcdir}/${pkgname}"
+    go test ./... -count=1 -timeout 120s
+}
+
+package() {
+    cd "${srcdir}/${pkgname}"
+
+    # 二进制
+    install -Dm755 relaywatch "${pkgdir}/usr/bin/relaywatch"
+
+    # 配置（backup：升级时保留用户修改）
+    install -Dm644 packaging/arch/config.yaml "${pkgdir}/etc/relaywatch/config.yaml"
+    install -Dm600 packaging/arch/env "${pkgdir}/etc/relaywatch/env"
+
+    # systemd
+    install -Dm644 packaging/arch/relaywatch.service "${pkgdir}/usr/lib/systemd/system/relaywatch.service"
+    install -Dm644 packaging/arch/relaywatch.sysusers "${pkgdir}/usr/lib/sysusers.d/relaywatch.conf"
+    install -Dm644 packaging/arch/relaywatch.tmpfiles "${pkgdir}/usr/lib/tmpfiles.d/relaywatch.conf"
+
+    # 文档
+    install -Dm644 README.md "${pkgdir}/usr/share/doc/relaywatch/README.md"
+}

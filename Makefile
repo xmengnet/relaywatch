@@ -1,4 +1,4 @@
-.PHONY: build web backend dev dev-backend dev-web test clean
+.PHONY: build web backend dev dev-backend dev-web test lint check-vuln quality clean
 
 build: web backend
 
@@ -41,6 +41,19 @@ dev-web:
 test:
 	go test ./...
 	cd web && pnpm test
+
+# 代码质量门禁（gofmt / interface{} / go vet / staticcheck / deadcode，与 CI 一致）
+lint:
+	./scripts/check-go-quality.sh
+
+# 依赖漏洞扫描
+check-vuln:
+	go tool govulncheck ./...
+
+# 全部质量门禁 + 竞态测试 + 漏洞扫描（与 CI 一致）
+quality: lint
+	go test -race ./...
+	go tool govulncheck ./...
 
 clean:
 	rm -rf relaywatch web/dist

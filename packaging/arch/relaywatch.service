@@ -1,0 +1,34 @@
+[Unit]
+Description=RelayWatch 版本更新监控
+Documentation=https://git.liyp.cc/xmengnet/relaywatch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=relaywatch
+Group=relaywatch
+WorkingDirectory=/var/lib/relaywatch
+# 密钥从环境文件读取：EnvironmentFile 避免密钥出现在 unit 文件里
+EnvironmentFile=-/etc/relaywatch/env
+ExecStart=/usr/bin/relaywatch -config /etc/relaywatch/config.yaml
+
+# 数据目录（systemd 自动创建并授权）
+StateDirectory=relaywatch
+StateDirectoryMode=0750
+
+# 安全加固
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

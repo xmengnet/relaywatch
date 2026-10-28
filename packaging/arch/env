@@ -1,0 +1,4 @@
+# /etc/relaywatch/env — 敏感项（安装后 chmod 600，勿提交到任何仓库）
+# openssl rand -base64 32 生成
+# 密钥丢失则数据库中所有 Token / Webhook 配置无法解密恢复，请单独备份！
+RELAYWATCH_SECRET_KEY=
