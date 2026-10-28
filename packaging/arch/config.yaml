@@ -1,0 +1,43 @@
+# RelayWatch 配置（Arch 包路径 /etc/relaywatch/config.yaml）
+# 密钥请写入 /etc/relaywatch/env 的 RELAYWATCH_SECRET_KEY（推荐，env 优先），
+# 或填到下方 security.secret_key。密钥丢失则已保存的 Token / Webhook 配置无法解密。
+server:
+  addr: ":8080"
+  base_url: "http://localhost:8080"
+  # 部署在反向代理之后时设为 true，才会采信 X-Forwarded-For / X-Real-IP；
+  # 直连部署保持 false，防止客户端伪造来源 IP 绕过登录限流。
+  trust_proxy: false
+
+database:
+  path: "/var/lib/relaywatch/relaywatch.db"
+
+security:
+  # openssl rand -base64 32
+  secret_key: ""
+  session_ttl: "168h"
+  # 登录失败按 IP + 用户名计数；累计 5 次失败后锁定 15 分钟
+  login_rate_limit: 5
+  login_lockout: "15m"
+
+scheduler:
+  tick: "10s"
+  max_conc: 10
+  min_interval: 60          # 单条监控最小检查间隔（秒）
+  host_rate_limit:
+    default_per_minute: 30  # 每主机每分钟请求上限
+    overrides:
+      api.github.com: 25    # 留余量给 429/Retry-After
+
+sources:
+  http_timeout: "20s"
+  user_agent: "RelayWatch/0.1"
+
+notifications:
+  retry:
+    max_attempts: 5
+    base_delay: "2s"
+    max_delay: "10m"
+
+logging:
+  level: "info"
+  format: "text"
