@@ -22,17 +22,14 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: "12.15.0"
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+
+      # 同 check.yml：pnpm 装进 node 自身 bin 目录，规避 Forgejo runner 的 PATH 传递问题
+      - name: Setup pnpm
+        run: npm install -g pnpm@12.15.0
 
       - name: Install system dependencies
         run: |

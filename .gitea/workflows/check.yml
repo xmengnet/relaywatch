@@ -60,17 +60,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: "12.15.0"
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+
+      # 不用 pnpm/action-setup：Forgejo runner 对 action 改 PATH 的传递不可靠，
+      # setup-node 的 cache: pnpm（运行期要调用 pnpm store path）与后续 run 步骤
+      # 都会报 "Unable to locate executable file: pnpm"。
+      # 改为装进 node 自身的 bin 目录（npm 所在目录），后续步骤必然可见。
+      - name: Set up pnpm
+        run: npm install -g pnpm@12.15.0
 
       - name: Install dependencies
         working-directory: web
