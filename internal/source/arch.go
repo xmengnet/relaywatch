@@ -29,10 +29,10 @@ func (s *AURSource) Validate(cfg map[string]any) error {
 
 // AUR RPC v5 info 响应
 type aurResponse struct {
-	Version   int          `json:"version"` // RPC 协议版本
-	Type      string       `json:"type"`
+	Version     int          `json:"version"` // RPC 协议版本
+	Type        string       `json:"type"`
 	ResultCount int          `json:"resultcount"`
-	Results   []aurPackage `json:"results"`
+	Results     []aurPackage `json:"results"`
 }
 
 type aurPackage struct {
@@ -77,10 +77,10 @@ func (s *ArchOfficialSource) Validate(cfg map[string]any) error {
 }
 
 type archSearchResponse struct {
-	Version  int              `json:"version"`
-	Limit    int              `json:"limit"`
-	Valid    bool             `json:"valid"`
-	Results  []archPkgResult  `json:"results"`
+	Version int             `json:"version"`
+	Limit   int             `json:"limit"`
+	Valid   bool            `json:"valid"`
+	Results []archPkgResult `json:"results"`
 }
 
 type archPkgResult struct {

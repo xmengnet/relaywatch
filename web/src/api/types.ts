@@ -8,6 +8,7 @@ export interface User {
   email?: string
   display_name?: string
   role: Role
+  permissions?: string[] | null
 }
 
 export interface AdminUser extends User {
@@ -58,6 +59,7 @@ export interface Monitor {
 export interface SourceMeta {
   type: string
   label: string
+  label_en?: string
   icon?: string
   fields: FieldSpec[]
 }
@@ -65,11 +67,14 @@ export interface SourceMeta {
 export interface FieldSpec {
   key: string
   label: string
+  label_en?: string
   type: 'string' | 'bool' | 'int' | 'select' | 'secret'
   required: boolean
   default?: unknown
   options?: string[]
   placeholder?: string
+  placeholder_en?: string
   help?: string
+  help_en?: string
   pattern?: string
 }

@@ -8,11 +8,12 @@ import (
 
 // userResponse 是 API 输出的用户视图，绝不包含密码哈希等内部字段。
 type userResponse struct {
-	ID          int64  `json:"id"`
-	Username    string `json:"username"`
-	Email       string `json:"email,omitempty"`
-	DisplayName string `json:"display_name,omitempty"`
-	Role        string `json:"role"`
+	ID          int64    `json:"id"`
+	Username    string   `json:"username"`
+	Email       string   `json:"email,omitempty"`
+	DisplayName string   `json:"display_name,omitempty"`
+	Role        string   `json:"role"`
+	Permissions []string `json:"permissions"` // null = 按角色默认（前端按角色判断）
 }
 
 func toUserResponse(u *store.User) *userResponse {
@@ -25,22 +26,23 @@ func toUserResponse(u *store.User) *userResponse {
 		Email:       u.Email,
 		DisplayName: u.DisplayName,
 		Role:        u.Role,
+		Permissions: u.Permissions,
 	}
 }
 
 // adminUserResponse 用户管理视图（admin 用），含来源/禁用/登录时间与资源计数。
 type adminUserResponse struct {
-	ID              int64    `json:"id"`
-	Username        string   `json:"username"`
-	Email           string   `json:"email,omitempty"`
-	DisplayName     string   `json:"display_name,omitempty"`
-	Role            string   `json:"role"`
-	Permissions     []string `json:"permissions"` // null = 未配置（按角色默认）
-	OIDCProvider    string   `json:"oidc_provider,omitempty"`
-	Disabled        bool     `json:"disabled"`
-	CreatedAt       string   `json:"created_at"`
-	LastLoginAt     *string  `json:"last_login_at,omitempty"`
-	MonitorCount    int64    `json:"monitor_count"`
+	ID           int64    `json:"id"`
+	Username     string   `json:"username"`
+	Email        string   `json:"email,omitempty"`
+	DisplayName  string   `json:"display_name,omitempty"`
+	Role         string   `json:"role"`
+	Permissions  []string `json:"permissions"` // null = 未配置（按角色默认）
+	OIDCProvider string   `json:"oidc_provider,omitempty"`
+	Disabled     bool     `json:"disabled"`
+	CreatedAt    string   `json:"created_at"`
+	LastLoginAt  *string  `json:"last_login_at,omitempty"`
+	MonitorCount int64    `json:"monitor_count"`
 }
 
 func toAdminUserResponse(u *store.User, monitorCount int64) *adminUserResponse {

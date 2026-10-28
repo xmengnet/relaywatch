@@ -22,7 +22,7 @@ func TestVersionFilter(t *testing.T) {
 	}{
 		{"1.2.3", "", "", false},
 		{"1.2.3", `^1\.`, "", false},
-		{"2.0.0", `^1\.`, "", true},          // include 不匹配 → 跳过
+		{"2.0.0", `^1\.`, "", true},            // include 不匹配 → 跳过
 		{"1.2.3-nightly", "", "nightly", true}, // ignore 匹配 → 跳过
 		{"1.2.3", "", "nightly", false},
 	}

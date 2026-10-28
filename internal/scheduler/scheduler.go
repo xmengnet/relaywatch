@@ -15,16 +15,16 @@ import (
 
 // HostLimiter per-host 令牌桶注册表。
 type HostLimiter struct {
-	mu       sync.Mutex
-	default_ float64 // 每分钟请求数
+	mu        sync.Mutex
+	default_  float64 // 每分钟请求数
 	overrides map[string]float64
-	buckets  map[string]*hostBucket
+	buckets   map[string]*hostBucket
 }
 
 type hostBucket struct {
-	tokens  float64
-	last    time.Time
-	perSec  float64
+	tokens      float64
+	last        time.Time
+	perSec      float64
 	frozenUntil time.Time // Retry-After 冻结
 }
 
@@ -98,18 +98,18 @@ func JitterFactor(id int64) float64 {
 
 // Scheduler 调度器。
 type Scheduler struct {
-	Store     store.Store
-	Checker   *check.Checker
-	Tick      time.Duration        // 调度粒度
-	MaxConc   int                  // 最大并发检查数
-	Hosts     *HostLimiter
-	MinInterval int                // 秒；低于该值的 interval 按该值处理
+	Store       store.Store
+	Checker     *check.Checker
+	Tick        time.Duration // 调度粒度
+	MaxConc     int           // 最大并发检查数
+	Hosts       *HostLimiter
+	MinInterval int // 秒；低于该值的 interval 按该值处理
 
-	sem      chan struct{}
-	running  map[int64]bool
-	mu       sync.Mutex
-	wg       sync.WaitGroup
-	cancel   context.CancelFunc
+	sem     chan struct{}
+	running map[int64]bool
+	mu      sync.Mutex
+	wg      sync.WaitGroup
+	cancel  context.CancelFunc
 }
 
 // Start 启动调度循环。

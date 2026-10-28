@@ -77,6 +77,9 @@ func main() {
 	authSvc := auth.NewService(st, cfg.Security.SessionTTL)
 	oidcSvc := auth.NewOIDCService(st, cfg.Security.SessionTTL, cfg.Server.BaseURL)
 
+	// 「网站管理」站点配置：API 镜像与源站点默认值（出站 URL 改写全局生效）
+	httpapi.LoadSiteConfig(ctx, st)
+
 	// 源注册表（新增源类型在 internal/source/defaults.go 维护）
 	registry := source.NewDefaultRegistry()
 
@@ -130,7 +133,7 @@ func main() {
 		dispatcher.OnDelivery = worker.OnDelivery
 
 		// 渠道测试发送 / 手动重发
-		testSender := notify.NewTestSender(notifiers)
+		testSender := notify.NewTestSender(notifiers, st)
 		resendOne := func(ctx context.Context, d *store.Delivery) error {
 			worker.ProcessForced(ctx, d)
 			return nil
@@ -140,6 +143,7 @@ func main() {
 			Auth:       authSvc,
 			OIDC:       oidcSvc,
 			Store:      st,
+			SecretBox:  box,
 			WebDist:    web.Dist(), // dev 构建标签下为 nil（前端走 Vite :5173）
 			Checker:    checker,
 			Registry:   registry,

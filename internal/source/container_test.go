@@ -76,3 +76,31 @@ func TestContainerSource(t *testing.T) {
 		t.Errorf("got version %q, want 1.2.0", res.Version)
 	}
 }
+
+func TestSplitRegistry(t *testing.T) {
+	cases := []struct {
+		name     string
+		image    string
+		registry string
+		wantHost string
+		wantPath string
+	}{
+		{"默认 Docker Hub", "nginx", "", "registry-1.docker.io", "nginx"},
+		{"显式 registry 优先", "myorg/myimage", "ghcr.io", "ghcr.io", "myorg/myimage"},
+		{"registry 带 scheme 与斜杠", "myorg/myimage", "https://ghcr.io/", "ghcr.io", "myorg/myimage"},
+		{"http registry", "myorg/myimage", "http://localhost:5000", "localhost:5000", "myorg/myimage"},
+		{"镜像名带域名", "ghcr.io/owner/repo", "", "ghcr.io", "owner/repo"},
+		{"registry 与镜像名重复域名", "ghcr.io/owner/repo", "ghcr.io", "ghcr.io", "owner/repo"},
+		{"带端口域名", "127.0.0.1:5000/ns/img", "", "127.0.0.1:5000", "ns/img"},
+		{"库路径不误判为域名", "library/nginx", "", "registry-1.docker.io", "library/nginx"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			host, path := splitRegistry(c.image, c.registry)
+			if host != c.wantHost || path != c.wantPath {
+				t.Errorf("splitRegistry(%q, %q) = (%q, %q), want (%q, %q)",
+					c.image, c.registry, host, path, c.wantHost, c.wantPath)
+			}
+		})
+	}
+}

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { FieldSpec, SourceMeta } from '@/api/types'
 import { getSourceTypes } from '@/api/monitors'
+import { useMetaText } from '@/composables/useMetaText'
 
 const props = defineProps<{
   modelValue: Record<string, unknown>
@@ -12,9 +14,13 @@ const emit = defineEmits<{
   'update:sourceType': [string]
 }>()
 
+const { t } = useI18n()
+const { label, help, placeholder } = useMetaText()
+
 const types = ref<SourceMeta[]>([])
 const current = computed(() => types.value.find(t => t.type === props.sourceType))
 const fields = computed<FieldSpec[]>(() => current.value?.fields ?? [])
+const typeOptions = computed(() => types.value.map(x => ({ value: x.type, title: label(x) })))
 
 onMounted(async () => {
   types.value = (await getSourceTypes()).items
@@ -38,7 +44,9 @@ function setField(key: string, value: unknown) {
 
 function fieldRules(f: FieldSpec) {
   const rules: ((v: unknown) => true | string)[] = []
-  if (f.required) rules.push(v => (v !== undefined && v !== null && String(v).trim() !== '') || `${f.label}不能为空`)
+  if (f.required) {
+    rules.push(v => (v !== undefined && v !== null && String(v).trim() !== '') || t('common.requiredField', { field: label(f) }))
+  }
   return rules
 }
 </script>
@@ -46,10 +54,10 @@ function fieldRules(f: FieldSpec) {
 <template>
   <v-select
     :model-value="sourceType"
-    :items="types"
-    item-title="label"
-    item-value="type"
-    label="监控源类型"
+    :items="typeOptions"
+    item-title="title"
+    item-value="value"
+    :label="t('monitors.edit.sourceType')"
     :prepend-inner-icon="current?.icon"
     @update:model-value="$emit('update:sourceType', $event)"
   />
@@ -58,8 +66,8 @@ function fieldRules(f: FieldSpec) {
     <v-switch
       v-if="f.type === 'bool'"
       :model-value="!!modelValue[f.key]"
-      :label="f.label"
-      :hint="f.help"
+      :label="label(f)"
+      :hint="help(f)"
       color="primary"
       persistent-hint
       @update:model-value="setField(f.key, $event)"
@@ -69,8 +77,8 @@ function fieldRules(f: FieldSpec) {
       v-else-if="f.type === 'select'"
       :model-value="(modelValue[f.key] as string) ?? ''"
       :items="f.options"
-      :label="f.label"
-      :hint="f.help"
+      :label="label(f)"
+      :hint="help(f)"
       persistent-hint
       @update:model-value="setField(f.key, $event)"
     />
@@ -78,9 +86,9 @@ function fieldRules(f: FieldSpec) {
     <v-text-field
       v-else
       :model-value="(modelValue[f.key] as string) ?? ''"
-      :label="f.label + (f.required ? ' *' : '')"
-      :hint="f.help"
-      :placeholder="f.placeholder"
+      :label="label(f) + (f.required ? ' *' : '')"
+      :hint="help(f)"
+      :placeholder="placeholder(f)"
       :rules="fieldRules(f)"
       :type="f.type === 'secret' ? 'password' : 'text'"
       persistent-hint

@@ -10,6 +10,7 @@ import (
 
 // fetchText GET 页面并返回文本正文；404 转 NotFoundError。
 func fetchText(ctx context.Context, o Options, url string, headers map[string]string) (string, error) {
+	url = RewriteURL(url)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err

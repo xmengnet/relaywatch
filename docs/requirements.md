@@ -150,7 +150,7 @@ RelayWatch 的目标：**把 nvchecker 式的精确版本检测，和 changedete
 | `slack` | Incoming Webhook URL |
 | `ntfy` | 服务地址 + topic + 可选 token |
 | `gotify` | 服务地址 + token |
-| `email_smtp` | SMTP 服务器、端口、账号、密码、收发件人 |
+| `email_smtp` | SMTP 服务器、端口、账号、密码、发件人；收件人可选，留空默认发送到渠道所有者的账号邮箱 |
 | `feishu` | 飞书机器人 Webhook |
 | `wecom` | 企业微信群机器人 Webhook |
 | `dingtalk` | 钉钉机器人 Webhook |

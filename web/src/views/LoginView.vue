@@ -21,7 +21,11 @@ const oidcProviders = ref<Array<{ name: string; icon_url?: string }>>([])
 // 注册（registration.enabled 开启时显示）
 const isRegister = ref(false)
 const regEmail = ref('')
+const regEmailCode = ref('')
 const regForm = ref()
+const sendingCode = ref(false)
+const codeSent = ref(false)
+const codeHint = ref('')
 
 // 内置 Provider 图标：按 name 小写匹配（simple-icons CDN，非官方资源）。
 // 加载失败（离线/内网）时回退为默认 mdi 图标，不影响登录。
@@ -54,7 +58,7 @@ function onIconError(name: string) {
 
 onMounted(async () => {
   if (route.query.error) {
-    errorMsg.value = 'OIDC 登录失败，请重试或使用本地账户'
+    errorMsg.value = t('auth.oidcFailed')
   }
   try {
     oidcProviders.value = (await listOIDCProviders()).items
@@ -82,13 +86,32 @@ async function submit() {
   }
 }
 
+async function sendCode() {
+  if (!regEmail.value || !regEmail.value.includes('@')) {
+    errorMsg.value = t('auth.emailInvalid')
+    return
+  }
+  sendingCode.value = true
+  errorMsg.value = ''
+  try {
+    const { sendRegisterCode } = await import('@/api/users')
+    await sendRegisterCode(regEmail.value)
+    codeSent.value = true
+    codeHint.value = t('auth.codeSent')
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    sendingCode.value = false
+  }
+}
+
 async function submitRegister() {
   const { valid } = await regForm.value.validate()
   if (!valid) return
   loading.value = true
   errorMsg.value = ''
   try {
-    await auth.register(username.value, password.value, regEmail.value || undefined)
+    await auth.register(username.value, password.value, regEmail.value || undefined, regEmailCode.value || undefined)
     router.push('/')
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e)
@@ -103,14 +126,14 @@ async function submitRegister() {
     <div class="text-center mb-6">
       <img :src="logoUrl" alt="RelayWatch logo" width="56" height="56" class="rounded-lg mb-3" />
       <div class="text-h5 font-weight-bold">RelayWatch</div>
-      <div class="text-body-2 text-medium-emphasis">版本更新监控</div>
+      <div class="text-body-2 text-medium-emphasis">{{ t('auth.subtitle') }}</div>
     </div>
 
     <v-form v-if="!isRegister" ref="form" @submit.prevent="submit">
       <v-text-field
         v-model="username"
         :label="t('auth.username')"
-        :rules="[v => !!v || '请输入用户名']"
+        :rules="[v => !!v || t('auth.usernameRequired')]"
         autocomplete="username"
         autofocus
       />
@@ -118,14 +141,14 @@ async function submitRegister() {
         v-model="password"
         :label="t('auth.password')"
         type="password"
-        :rules="[v => !!v || '请输入密码']"
+        :rules="[v => !!v || t('auth.passwordRequired')]"
         autocomplete="current-password"
       />
       <v-alert v-if="errorMsg" type="error" density="compact" class="mb-4">{{ errorMsg }}</v-alert>
       <v-btn type="submit" block :loading="loading">{{ t('auth.login') }}</v-btn>
       <div v-if="auth.registrationOpen" class="text-center mt-3">
         <v-btn variant="text" size="small" color="primary" @click="isRegister = true; errorMsg = ''">
-          没有账户？注册
+          {{ t('auth.noAccount') }}
         </v-btn>
       </div>
     </v-form>
@@ -133,24 +156,34 @@ async function submitRegister() {
     <v-form v-else ref="regForm" @submit.prevent="submit">
       <v-text-field
         v-model="username"
-        label="用户名"
-        :rules="[v => !!v || '请输入用户名']"
+        :label="t('auth.username')"
+        :rules="[v => !!v || t('auth.usernameRequired')]"
         autocomplete="username"
         autofocus
       />
       <v-text-field
         v-model="password"
-        label="密码"
+        :label="t('auth.password')"
         type="password"
-        :rules="[v => (v && v.length >= 8) || '至少 8 个字符']"
+        :rules="[v => (v && v.length >= 8) || t('common.atLeast8')]"
         autocomplete="new-password"
       />
-      <v-text-field v-model="regEmail" label="邮箱（可选）" type="email" autocomplete="email" />
+      <v-text-field v-model="regEmail" :label="t('auth.email')" type="email" autocomplete="email" />
+      <div class="d-flex align-start ga-2">
+        <v-text-field
+          v-model="regEmailCode" :label="t('auth.emailCode')" density="compact"
+          :hint="t('auth.emailCodeHint')" persistent-hint
+        />
+        <v-btn :loading="sendingCode" :disabled="!regEmail || !auth.registrationOpen" class="mt-1" @click="sendCode">
+          {{ codeSent ? t('auth.resendCode') : t('auth.sendCode') }}
+        </v-btn>
+      </div>
+      <div v-if="codeHint" class="text-caption text-success mb-2">{{ codeHint }}</div>
       <v-alert v-if="errorMsg" type="error" density="compact" class="mb-4">{{ errorMsg }}</v-alert>
-      <v-btn type="submit" block color="primary" :loading="loading">注册</v-btn>
+      <v-btn type="submit" block color="primary" :loading="loading">{{ t('auth.register') }}</v-btn>
       <div class="text-center mt-3">
         <v-btn variant="text" size="small" @click="isRegister = false; errorMsg = ''">
-          已有账户？登录
+          {{ t('auth.haveAccount') }}
         </v-btn>
       </div>
     </v-form>
@@ -158,7 +191,7 @@ async function submitRegister() {
     <template v-if="oidcProviders.length">
       <div class="d-flex align-center my-4">
         <v-divider />
-        <span class="text-caption text-medium-emphasis mx-2">或</span>
+        <span class="text-caption text-medium-emphasis mx-2">{{ t('common.or') }}</span>
         <v-divider />
       </div>
       <v-btn
@@ -183,7 +216,7 @@ async function submitRegister() {
           />
           <v-icon v-else icon="mdi-shield-account" size="20" class="mr-2" />
         </template>
-        <span class="flex-grow-1 text-center">使用 {{ p.name }} 登录</span>
+        <span class="flex-grow-1 text-center">{{ t('auth.loginWith', { name: p.name }) }}</span>
       </v-btn>
     </template>
   </v-card>

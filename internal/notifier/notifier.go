@@ -43,22 +43,26 @@ type Notifier interface {
 type FieldSpec = fieldSpec
 
 type fieldSpec struct {
-	Key         string   `json:"key"`
-	Label       string   `json:"label"`
-	Type        string   `json:"type"`
-	Required    bool     `json:"required"`
-	Default     any      `json:"default,omitempty"`
-	Options     []string `json:"options,omitempty"`
-	Placeholder string   `json:"placeholder,omitempty"`
-	Help        string   `json:"help,omitempty"`
+	Key           string   `json:"key"`
+	Label         string   `json:"label"`
+	LabelEn       string   `json:"label_en,omitempty"`
+	Type          string   `json:"type"`
+	Required      bool     `json:"required"`
+	Default       any      `json:"default,omitempty"`
+	Options       []string `json:"options,omitempty"`
+	Placeholder   string   `json:"placeholder,omitempty"`
+	PlaceholderEn string   `json:"placeholder_en,omitempty"`
+	Help          string   `json:"help,omitempty"`
+	HelpEn        string   `json:"help_en,omitempty"`
 }
 
 // Meta 渠道类型元数据。
 type Meta struct {
-	Type   string      `json:"type"`
-	Label  string      `json:"label"`
-	Icon   string      `json:"icon,omitempty"`
-	Fields []FieldSpec `json:"fields"`
+	Type    string      `json:"type"`
+	Label   string      `json:"label"`
+	LabelEn string      `json:"label_en,omitempty"`
+	Icon    string      `json:"icon,omitempty"`
+	Fields  []FieldSpec `json:"fields"`
 }
 
 // MetaProvider 能自我描述的渠道。
@@ -104,7 +108,9 @@ func (r *Registry) Metas() []Meta {
 	out := make([]Meta, 0, len(r.order))
 	for _, typ := range r.order {
 		if mp, ok := r.notifiers[typ].(MetaProvider); ok {
-			out = append(out, mp.Meta())
+			m := mp.Meta()
+			applyMetaEN(&m)
+			out = append(out, m)
 		}
 	}
 	return out

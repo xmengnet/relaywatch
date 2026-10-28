@@ -317,9 +317,9 @@ func (s *DockerTagSource) Meta() Meta {
 		Label: "容器镜像",
 		Icon:  "mdi-docker",
 		Fields: []FieldSpec{
-			{Key: "image", Label: "镜像", Type: "string", Required: true, Placeholder: "library/nginx 或 user/repo"},
+			{Key: "image", Label: "镜像", Type: "string", Required: true, Placeholder: "nginx 或 user/repo 或 ghcr.io/owner/repo"},
 			{Key: "tag_regex", Label: "Tag 正则", Type: "string", Help: "只考虑匹配的 tag，如 ^v\\d+\\.\\d+\\.\\d+$"},
-			{Key: "registry", Label: "Registry", Type: "string", Help: "默认 Docker Hub"},
+			{Key: "registry", Label: "Registry", Type: "string", Help: "留空时自动从镜像名解析，默认 Docker Hub"},
 		},
 	}
 }
@@ -339,19 +339,36 @@ type dockerTagsResp struct {
 }
 
 func (s *DockerTagSource) Fetch(ctx context.Context, cfg map[string]any) (*Result, error) {
-	image := strings.Trim(cfgString(cfg, "image"), "/")
-	if !strings.Contains(image, "/") {
-		image = "library/" + image // Docker Hub 官方镜像
-	}
 	pattern, err := compileRegex(cfgString(cfg, "tag_regex"))
 	if err != nil {
 		return nil, fmt.Errorf("tag_regex 无效: %w", err)
 	}
 
+	registryHost, imagePath := splitRegistry(cfgString(cfg, "image"), cfgString(cfg, "registry"))
+
+	// 非 Docker Hub（registry 字段或镜像名里的域名）：走标准 OCI tags API，与 container 源同一条路径
+	if !isDockerHubRegistry(registryHost) {
+		tags, err := fetchOCITags(ctx, registryHost, imagePath)
+		if err != nil {
+			return nil, err
+		}
+		best := pickMaxTag(tags, pattern)
+		if best == "" {
+			return nil, fmt.Errorf("没有匹配 tag_regex 的 tag")
+		}
+		return &Result{
+			Version: best,
+			URL:     fmt.Sprintf("https://%s/%s", registryHost, imagePath),
+		}, nil
+	}
+
+	// Docker Hub：hub.docker.com v2 接口（按最近更新排序，最多扫 3 页避免限流）
+	if !strings.Contains(imagePath, "/") {
+		imagePath = "library/" + imagePath // 官方镜像
+	}
 	var best string
-	pageURL := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/tags?page_size=100", url.PathEscape(image))
+	pageURL := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/tags?page_size=100", url.PathEscape(imagePath))
 	for page := 0; pageURL != "" && page < 3; page++ {
-		// 最多扫 3 页（300 个 tag），避免被限流
 		var resp dockerTagsResp
 		if err := fetchJSON(ctx, Options{}, pageURL, nil, &resp); err != nil {
 			return nil, err
@@ -371,6 +388,6 @@ func (s *DockerTagSource) Fetch(ctx context.Context, cfg map[string]any) (*Resul
 	}
 	return &Result{
 		Version: best,
-		URL:     "https://hub.docker.com/r/" + image,
+		URL:     "https://hub.docker.com/r/" + imagePath,
 	}, nil
 }

@@ -60,6 +60,7 @@ func (c *Checker) Check(ctx context.Context, m *store.Monitor) Outcome {
 	if err := json.Unmarshal([]byte(m.SourceConfig), &cfg); err != nil {
 		return c.fail(ctx, m, start, "source_config 不是合法 JSON: "+err.Error(), false)
 	}
+	cfg = source.ApplyHostDefaults(m.SourceType, cfg) // 「网站管理」站点默认值回填
 
 	fetchCtx, cancel := context.WithTimeout(ctx, c.timeout())
 	defer cancel()
@@ -161,20 +162,20 @@ func (c *Checker) Check(ctx context.Context, m *store.Monitor) Outcome {
 	if err := c.Store.UpdateMonitorCheckResult(ctx, m.ID, cr); err != nil {
 		slog.Error("update monitor result", "monitor", m.ID, "err", err)
 	}
-		_ = c.Store.AddCheckHistory(ctx, &store.CheckHistory{
-			MonitorID:  m.ID,
-			CheckedAt:  now,
-			DurationMS: out.DurationMS,
-			OK:         true,
-			Version:    version,
-		})
+	_ = c.Store.AddCheckHistory(ctx, &store.CheckHistory{
+		MonitorID:  m.ID,
+		CheckedAt:  now,
+		DurationMS: out.DurationMS,
+		OK:         true,
+		Version:    version,
+	})
 
-		if c.OnChecked != nil {
-			c.OnChecked(ctx, m)
-		}
+	if c.OnChecked != nil {
+		c.OnChecked(ctx, m)
+	}
 
-		c.emit(m.ID, out)
-		return out
+	c.emit(m.ID, out)
+	return out
 }
 
 func (c *Checker) fail(ctx context.Context, m *store.Monitor, start time.Time, msg string, notFound bool) Outcome {

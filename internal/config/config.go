@@ -28,10 +28,10 @@ type Config struct {
 	} `yaml:"security"`
 
 	Scheduler struct {
-		Tick          time.Duration      `yaml:"tick"`
-		MaxConc       int                `yaml:"max_conc"`
-		MinInterval   int                `yaml:"min_interval"` // 秒
-		Jitter        float64            `yaml:"jitter"`       // 目前固定 0.1（确定性），预留配置
+		Tick          time.Duration `yaml:"tick"`
+		MaxConc       int           `yaml:"max_conc"`
+		MinInterval   int           `yaml:"min_interval"` // 秒
+		Jitter        float64       `yaml:"jitter"`       // 目前固定 0.1（确定性），预留配置
 		HostRateLimit struct {
 			DefaultPerMinute int            `yaml:"default_per_minute"`
 			Overrides        map[string]int `yaml:"overrides"`

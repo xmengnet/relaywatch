@@ -124,47 +124,47 @@ func (h *ImportExportHandler) doImport(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		cfgJSON, _ := json.Marshal(it.SourceConfig)
-			m := &store.Monitor{
-				Name:                it.Name,
-				SourceType:          it.SourceType,
-				SourceConfig:        string(cfgJSON),
-				VersionPrefix:       it.VersionPrefix,
-				VersionIncludeRegex: it.IncludeRegex,
-				VersionIgnoreRegex:  it.IgnoreRegex,
-				FromPattern:         it.FromPattern,
-				ToPattern:           it.ToPattern,
-				IntervalSec:         300,
-				Enabled:             true,
-				State:               store.StateUnknown,
-			}
-			if err := h.St.CreateMonitor(r.Context(), m); err != nil {
-				skipped++
-				continue
-			}
-			imported++
+		m := &store.Monitor{
+			Name:                it.Name,
+			SourceType:          it.SourceType,
+			SourceConfig:        string(cfgJSON),
+			VersionPrefix:       it.VersionPrefix,
+			VersionIncludeRegex: it.IncludeRegex,
+			VersionIgnoreRegex:  it.IgnoreRegex,
+			FromPattern:         it.FromPattern,
+			ToPattern:           it.ToPattern,
+			IntervalSec:         300,
+			Enabled:             true,
+			State:               store.StateUnknown,
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"imported": imported, "skipped": skipped})
+		if err := h.St.CreateMonitor(r.Context(), m); err != nil {
+			skipped++
+			continue
+		}
+		imported++
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"imported": imported, "skipped": skipped})
+}
 
-	// ---------- 导出 ----------
+// ---------- 导出 ----------
 
-	type exportMonitor struct {
-		Name                string          `json:"name"`
-		SourceType          string          `json:"source_type"`
-		SourceConfig        json.RawMessage `json:"source_config"`
-		VersionPrefix       string          `json:"version_prefix,omitempty"`
-		VersionSuffix       string          `json:"version_suffix,omitempty"`
-		VersionIncludeRegex string          `json:"version_include_regex,omitempty"`
-		VersionIgnoreRegex  string          `json:"version_ignore_regex,omitempty"`
-		FromPattern         string          `json:"from_pattern,omitempty"`
-		ToPattern           string          `json:"to_pattern,omitempty"`
-		IntervalSec         int             `json:"interval_sec"`
-		Enabled             bool            `json:"enabled"`
-		NotifyCooldownSec   int             `json:"notify_cooldown_sec"`
-		Tags                []string        `json:"tags"`
-		Note                string          `json:"note,omitempty"`
-		ChannelIDs          []int64         `json:"channel_ids,omitempty"`
-	}
+type exportMonitor struct {
+	Name                string          `json:"name"`
+	SourceType          string          `json:"source_type"`
+	SourceConfig        json.RawMessage `json:"source_config"`
+	VersionPrefix       string          `json:"version_prefix,omitempty"`
+	VersionSuffix       string          `json:"version_suffix,omitempty"`
+	VersionIncludeRegex string          `json:"version_include_regex,omitempty"`
+	VersionIgnoreRegex  string          `json:"version_ignore_regex,omitempty"`
+	FromPattern         string          `json:"from_pattern,omitempty"`
+	ToPattern           string          `json:"to_pattern,omitempty"`
+	IntervalSec         int             `json:"interval_sec"`
+	Enabled             bool            `json:"enabled"`
+	NotifyCooldownSec   int             `json:"notify_cooldown_sec"`
+	Tags                []string        `json:"tags"`
+	Note                string          `json:"note,omitempty"`
+	ChannelIDs          []int64         `json:"channel_ids,omitempty"`
+}
 
 type exportChannel struct {
 	Name     string          `json:"name"`
@@ -223,12 +223,12 @@ func (h *ImportExportHandler) exportAll(w http.ResponseWriter, r *http.Request) 
 		}
 		exportMonitors = append(exportMonitors, exportMonitor{
 			Name: m.Name, SourceType: m.SourceType, SourceConfig: cfg,
-				VersionPrefix: m.VersionPrefix, VersionSuffix: m.VersionSuffix,
-				VersionIncludeRegex: m.VersionIncludeRegex, VersionIgnoreRegex: m.VersionIgnoreRegex,
-				FromPattern: m.FromPattern, ToPattern: m.ToPattern,
-				IntervalSec: m.IntervalSec, Enabled: m.Enabled,
+			VersionPrefix: m.VersionPrefix, VersionSuffix: m.VersionSuffix,
+			VersionIncludeRegex: m.VersionIncludeRegex, VersionIgnoreRegex: m.VersionIgnoreRegex,
+			FromPattern: m.FromPattern, ToPattern: m.ToPattern,
+			IntervalSec: m.IntervalSec, Enabled: m.Enabled,
 			NotifyCooldownSec: m.NotifyCooldownSec,
-			Tags: tags, Note: m.Note, ChannelIDs: m.ChannelIDs,
+			Tags:              tags, Note: m.Note, ChannelIDs: m.ChannelIDs,
 		})
 	}
 
@@ -285,4 +285,3 @@ func redactMap(doc map[string]any, judge func(key, val string) string) {
 		}
 	}
 }
-

@@ -2,9 +2,19 @@ import 'vuetify/styles'
 import '@mdi/font/css/materialdesignicons.css'
 import { createVuetify } from 'vuetify'
 import { aliases, mdi } from 'vuetify/iconsets/mdi'
+import { zhHans } from 'vuetify/locale'
+import { i18n } from '@/i18n'
+
+// Vuetify 内置文案（分页、空表、关闭按钮等）跟随界面语言
+const vuetifyLocale = i18n.global.locale.value === 'en' ? 'en' : 'zhHans'
 
 export const vuetify = createVuetify({
   icons: { defaultSet: 'mdi', aliases, sets: { mdi } },
+  locale: {
+    locale: vuetifyLocale,
+    fallback: 'en',
+    messages: { zhHans },
+  },
   theme: {
     defaultTheme: 'light',
     themes: {

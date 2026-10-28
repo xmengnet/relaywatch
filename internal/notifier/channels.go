@@ -25,12 +25,12 @@ func (n *WebhookNotifier) Meta() Meta {
 }
 
 type webhookPayload struct {
-	Title    string       `json:"title"`
-	Body     string       `json:"body"`
-	URL      string       `json:"url,omitempty"`
-	Markdown bool         `json:"markdown"`
-	Monitor  webhookMon   `json:"monitor"`
-	Change   *webhookChg  `json:"change,omitempty"`
+	Title    string      `json:"title"`
+	Body     string      `json:"body"`
+	URL      string      `json:"url,omitempty"`
+	Markdown bool        `json:"markdown"`
+	Monitor  webhookMon  `json:"monitor"`
+	Change   *webhookChg `json:"change,omitempty"`
 }
 
 type webhookMon struct {

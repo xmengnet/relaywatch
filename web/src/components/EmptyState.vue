@@ -1,15 +1,18 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+
 defineProps<{ to?: string }>()
+const { t } = useI18n()
 </script>
 
 <template>
   <v-empty-state
     icon="mdi-radar"
-    headline="还没有监控"
-    text="添加第一个监控，自动跟踪上游版本更新"
+    :headline="t('monitors.empty')"
+    :text="t('monitors.emptyHint')"
   >
     <template #actions>
-      <v-btn v-if="to" :to="to" color="primary" prepend-icon="mdi-plus">新建监控</v-btn>
+      <v-btn v-if="to" :to="to" color="primary" prepend-icon="mdi-plus">{{ t('monitors.addFirst') }}</v-btn>
     </template>
   </v-empty-state>
 </template>

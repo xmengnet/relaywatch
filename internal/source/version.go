@@ -158,4 +158,3 @@ func RewriteVersion(v, fromPattern, toPattern string) (string, error) {
 	repl := pythonReplToGoRepl(toPattern)
 	return re.ReplaceAllString(v, repl), nil
 }
-

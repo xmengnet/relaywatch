@@ -22,7 +22,7 @@ type Worker struct {
 	OnDelivery func(status store.DeliveryStatus)
 
 	cancelFn context.CancelFunc // Start 时记录，Stop 时触发（与作废投递的 cancel 方法无关）
-	wg     sync.WaitGroup     // 跟踪 loop；Stop 等待其在跑轮次结束
+	wg       sync.WaitGroup     // 跟踪 loop；Stop 等待其在跑轮次结束
 }
 
 // ForceFlag 在投递记录上标记手动重发（运行时字段，不落库）。
@@ -99,48 +99,48 @@ func (w *Worker) processOne(ctx context.Context, d *store.Delivery) {
 		return
 	}
 
-		// 补发前校验（deferred 记录四项校验，pending 立即投递也校验前两项）
-		if !m.Enabled {
-			w.cancel(ctx, d, "monitor disabled")
-			return
-		}
-		if !ch.Enabled {
-			w.cancel(ctx, d, "channel disabled")
-			return
-		}
+	// 补发前校验（deferred 记录四项校验，pending 立即投递也校验前两项）
+	if !m.Enabled {
+		w.cancel(ctx, d, "monitor disabled")
+		return
+	}
+	if !ch.Enabled {
+		w.cancel(ctx, d, "channel disabled")
+		return
+	}
 
-		var msg *notifier.Message
-		if d.Kind == "compare" {
-			// 双轨对比校验
-			if m.ReferenceMonitorID == nil {
-				w.cancel(ctx, d, "reference removed")
+	var msg *notifier.Message
+	if d.Kind == "compare" {
+		// 双轨对比校验
+		if m.ReferenceMonitorID == nil {
+			w.cancel(ctx, d, "reference removed")
+			return
+		}
+		msg = w.buildCompareMessage(ctx, m, ch, d, d.Force)
+		if msg == nil {
+			w.cancel(ctx, d, "compare condition no longer holds")
+			return
+		}
+	} else {
+		if d.Status == store.DeliveryDeferred {
+			if m.State != store.StateHasUpdate {
+				w.cancel(ctx, d, "monitor no longer has_update")
 				return
 			}
-			msg = w.buildCompareMessage(ctx, m, ch, d, d.Force)
-			if msg == nil {
-				w.cancel(ctx, d, "compare condition no longer holds")
-				return
-			}
-		} else {
-			if d.Status == store.DeliveryDeferred {
-				if m.State != store.StateHasUpdate {
-					w.cancel(ctx, d, "monitor no longer has_update")
+			if d.ChangeID != nil {
+				open, err := w.Store.OpenVersionChange(ctx, m.ID)
+				if err != nil || open == nil || open.ID != *d.ChangeID {
+					w.cancel(ctx, d, "change cycle superseded")
 					return
 				}
-				if d.ChangeID != nil {
-					open, err := w.Store.OpenVersionChange(ctx, m.ID)
-					if err != nil || open == nil || open.ID != *d.ChangeID {
-						w.cancel(ctx, d, "change cycle superseded")
-						return
-					}
-				}
-			}
-			msg = w.buildMessage(ctx, m, ch, d, d.Force)
-			if msg == nil {
-				w.cancel(ctx, d, "no open change to deliver")
-				return
 			}
 		}
+		msg = w.buildMessage(ctx, m, ch, d, d.Force)
+		if msg == nil {
+			w.cancel(ctx, d, "no open change to deliver")
+			return
+		}
+	}
 
 	// 发送
 	n, ok := w.Notifiers.Get(ch.Type)
@@ -153,6 +153,7 @@ func (w *Worker) processOne(ctx context.Context, d *store.Delivery) {
 		w.cancel(ctx, d, "channel config invalid")
 		return
 	}
+	w.injectOwnerEmail(ctx, ch, cfg)
 	sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	sendErr := n.Send(sendCtx, cfg, msg)
@@ -244,14 +245,14 @@ func (w *Worker) buildMessage(ctx context.Context, m *store.Monitor, ch *store.C
 		slog.Error("render template", "err", err)
 		body = fmt.Sprintf("%s: %s → %s", m.Name, oldVersion, newVersion)
 	}
-		return &notifier.Message{
-			Title:    title,
-			Body:     body,
-			Markdown: true,
-			Monitor:  data.Monitor,
-			Change:   data.Change,
-		}
+	return &notifier.Message{
+		Title:    title,
+		Body:     body,
+		Markdown: true,
+		Monitor:  data.Monitor,
+		Change:   data.Change,
 	}
+}
 
 func (w *Worker) buildCompareMessage(ctx context.Context, m *store.Monitor, ch *store.Channel, d *store.Delivery, force bool) *notifier.Message {
 	if m.ReferenceMonitorID == nil {
@@ -315,6 +316,25 @@ func (w *Worker) cancel(ctx context.Context, d *store.Delivery, reason string) {
 		slog.Error("cancel delivery", "err", err)
 	}
 	w.emit(d.Status)
+}
+
+// injectOwnerEmail 邮件渠道收件人缺省时回填渠道所有者的账号邮箱。
+// 仅在 to 为空时写入 owner_email，发送方按其兜底；共享渠道无所有者则不填。
+func (w *Worker) injectOwnerEmail(ctx context.Context, ch *store.Channel, cfg map[string]any) {
+	if ch.Type != "email_smtp" {
+		return
+	}
+	if to, _ := cfg["to"].(string); to != "" {
+		return
+	}
+	if ch.OwnerID == nil || *ch.OwnerID == 0 {
+		return
+	}
+	u, err := w.Store.UserByID(ctx, *ch.OwnerID)
+	if err != nil || u == nil || u.Email == "" {
+		return
+	}
+	cfg["owner_email"] = u.Email
 }
 
 func (w *Worker) interval() time.Duration {

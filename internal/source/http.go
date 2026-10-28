@@ -35,7 +35,9 @@ func (o Options) ua() string {
 }
 
 // fetchJSON GET 一个 JSON API 并解码；404 返回 *NotFoundError。
+// 出站 URL 先经 RewriteURL 做镜像/代理改写（「网站管理」配置，无规则时原样）。
 func fetchJSON(ctx context.Context, o Options, url string, headers map[string]string, out any) error {
+	url = RewriteURL(url)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -63,6 +65,7 @@ func fetchJSON(ctx context.Context, o Options, url string, headers map[string]st
 
 // fetchXML GET 一个 XML 端点并解码；404 返回 *NotFoundError。
 func fetchXML(ctx context.Context, o Options, url string, headers map[string]string, out any) error {
+	url = RewriteURL(url)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

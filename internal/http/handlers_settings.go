@@ -17,11 +17,12 @@ type SettingsHandler struct {
 const settingAlertChannels = "alert_channel_ids"
 
 func (h *SettingsHandler) routes(r chiRouterIface) {
-	r.Get("/settings", h.get)
-	// 写设置仅 admin
-	r.Group(func(r chiRouterIface) {
+	// 读与写都仅 admin：settings 含告警渠道归属、注册开关等系统级配置，
+	// 普通用户不应看到（M8 起「设置」整页仅 admin 可达，接口同步收紧）
+	r.Route("/settings", func(r chiRouterIface) {
 		r.Use(requireAdminMiddleware)
-		r.Put("/settings", h.put)
+		r.Get("/", h.get)
+		r.Put("/", h.put)
 	})
 }
 
@@ -38,10 +39,10 @@ func requireAdminMiddleware(next http.Handler) http.Handler {
 }
 
 type settingsResponse struct {
-	AlertChannelIDs           []int64 `json:"alert_channel_ids"`
-	RegistrationEnabled       bool    `json:"registration_enabled"`
-	RegistrationDefaultRole   string  `json:"registration_default_role"`
-	RegistrationRequireEmail  bool    `json:"registration_require_email"`
+	AlertChannelIDs          []int64 `json:"alert_channel_ids"`
+	RegistrationEnabled      bool    `json:"registration_enabled"`
+	RegistrationDefaultRole  string  `json:"registration_default_role"`
+	RegistrationRequireEmail bool    `json:"registration_require_email"`
 }
 
 func (h *SettingsHandler) get(w http.ResponseWriter, r *http.Request) {

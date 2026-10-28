@@ -1,3 +1,5 @@
+import { i18n } from '@/i18n'
+
 let csrfToken = ''
 
 export class ApiError extends Error {
@@ -35,7 +37,7 @@ export async function apiFetch<T>(
       location.href = '/login'
     }
     const body = await res.json().catch(() => ({}))
-    throw new ApiError(body.message ?? '未登录', 401, body.fields)
+    throw new ApiError(body.message ?? i18n.global.t('common.unauthorized'), 401, body.fields)
   }
 
   if (!res.ok) {

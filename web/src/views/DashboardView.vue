@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getStats, listMonitors } from '@/api/monitors'
 import { useSse } from '@/composables/useSse'
 import StatusChip from '@/components/StatusChip.vue'
 import RelativeTime from '@/components/RelativeTime.vue'
 import VersionDiff from '@/components/VersionDiff.vue'
 import type { Monitor } from '@/api/types'
+
+const { t } = useI18n()
 
 const stats = ref<{ total: number; has_update: number; error: number; ok: number; missing: number; unknown: number; lagging?: number } | null>(null)
 const attention = ref<Monitor[]>([])
@@ -33,17 +36,17 @@ onMounted(() => {
 useSse('check.done', () => { refreshDashboard() })
 useSse('delivery.done', () => { refreshDashboard() })
 
-const cards = [
-  { key: 'total', label: '监控总数', color: 'primary', icon: 'mdi-radar', to: '/monitors' },
-  { key: 'has_update', label: '有更新', color: 'warning', icon: 'mdi-arrow-up-circle', to: '/monitors?state=has_update' },
-  { key: 'lagging', label: '上游落后', color: 'deep-orange', icon: 'mdi-clock-alert-outline', to: '/monitors?compare=lagging' },
-  { key: 'error', label: '异常', color: 'error', icon: 'mdi-alert-circle', to: '/monitors?state=error' },
-] as const
+const cards = computed(() => [
+  { key: 'total', label: t('dashboard.total'), color: 'primary', icon: 'mdi-radar', to: '/monitors' },
+  { key: 'has_update', label: t('dashboard.updates'), color: 'warning', icon: 'mdi-arrow-up-circle', to: '/monitors?state=has_update' },
+  { key: 'lagging', label: t('dashboard.lagging'), color: 'deep-orange', icon: 'mdi-clock-alert-outline', to: '/monitors?compare=lagging' },
+  { key: 'error', label: t('dashboard.errors'), color: 'error', icon: 'mdi-alert-circle', to: '/monitors?state=error' },
+] as const)
 </script>
 
 <template>
   <div v-if="stats">
-    <div class="text-h5 mb-6">仪表盘</div>
+    <div class="text-h5 mb-6">{{ t('dashboard.title') }}</div>
 
     <v-row class="mb-6">
       <v-col v-for="c in cards" :key="c.key" cols="12" sm="6" md="3">
@@ -58,7 +61,7 @@ const cards = [
     </v-row>
 
     <v-card class="pa-6">
-      <div class="text-subtitle-1 font-weight-medium mb-2">需要关注</div>
+      <div class="text-subtitle-1 font-weight-medium mb-2">{{ t('dashboard.attention') }}</div>
       <v-list v-if="attention.length" density="comfortable">
         <v-list-item v-for="m in attention" :key="m.id" :to="`/monitors/${m.id}`">
           <template #prepend>
@@ -70,7 +73,7 @@ const cards = [
             <span class="mx-2">·</span>
             <VersionDiff :old-version="m.current_version" :new-version="m.latest_version" />
             <v-chip v-if="m.compare_state === 'lagging'" size="x-small" color="error" class="ms-2" label>
-              落后 · {{ m.reference_monitor_name || m.compare_ref_version || '上游' }}
+              {{ t('compare.chip.lagging', { ref: m.reference_monitor_name || m.compare_ref_version || t('compare.upstream') }) }}
             </v-chip>
             <span v-if="m.last_error" class="text-error"> {{ m.last_error }}</span>
           </v-list-item-subtitle>
@@ -81,7 +84,7 @@ const cards = [
           </template>
         </v-list-item>
       </v-list>
-      <div v-else class="text-medium-emphasis py-4 text-center">一切正常，暂无需要关注的监控</div>
+      <div v-else class="text-medium-emphasis py-4 text-center">{{ t('dashboard.allGood') }}</div>
     </v-card>
   </div>
   <div v-else class="text-center py-12">

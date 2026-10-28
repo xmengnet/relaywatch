@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -167,31 +168,59 @@ func fetchOCITags(ctx context.Context, registryHost, imagePath string) ([]string
 	return tagResp.Tags, nil
 }
 
+// splitRegistry 解析镜像目标：返回 registry 域名与镜像路径（不含域名）。
+// registry 显式给出时优先；否则尝试把 image 的首段识别为域名（ghcr.io/owner/repo）；
+// 都没有时回落到 Docker Hub。container 与 docker_tag 两个源共用。
+func splitRegistry(image, registry string) (host, path string) {
+	host = strings.TrimSpace(registry)
+	host = strings.TrimPrefix(host, "https://")
+	host = strings.TrimPrefix(host, "http://")
+	host = strings.TrimRight(host, "/")
+	path = strings.Trim(image, "/")
+	if host != "" {
+		// 镜像名里若已带同一域名前缀则剥离，避免拼成 host/host/xxx
+		if rest, ok := strings.CutPrefix(path, host+"/"); ok {
+			path = rest
+		}
+		return host, path
+	}
+	if parts := strings.SplitN(path, "/", 2); len(parts) == 2 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":")) {
+		return parts[0], parts[1]
+	}
+	return "registry-1.docker.io", path
+}
+
+// isDockerHubRegistry 判断是否 Docker Hub 官方仓库（含常见别名）。
+func isDockerHubRegistry(host string) bool {
+	switch strings.ToLower(host) {
+	case "", "registry-1.docker.io", "docker.io", "index.docker.io", "hub.docker.com":
+		return true
+	}
+	return false
+}
+
+// pickMaxTag 从 tag 列表中选出匹配正则的最大版本；pattern 为 nil 表示不过滤。
+func pickMaxTag(tags []string, pattern *regexp.Regexp) string {
+	var best string
+	for _, tag := range tags {
+		if pattern != nil && !pattern.MatchString(tag) {
+			continue
+		}
+		if best == "" || greaterVersion(tag, best) {
+			best = tag
+		}
+	}
+	return best
+}
+
 func (s *ContainerSource) Fetch(ctx context.Context, cfg map[string]any) (*Result, error) {
 	rawImage := cfgString(cfg, "image")
 	rawRegistry := cfgString(cfg, "registry")
 	tagRegex := cfgString(cfg, "tag_regex")
 
-	var registryHost string
-	var imagePath string
-
-	if rawRegistry != "" {
-		registryHost = strings.TrimRight(strings.TrimPrefix(rawRegistry, "https://"), "/")
-		imagePath = strings.Trim(rawImage, "/")
-	} else {
-		// 尝试从 image 解析域名，如 ghcr.io/owner/repo
-		parts := strings.Split(rawImage, "/")
-		if len(parts) > 1 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":")) {
-			registryHost = parts[0]
-			imagePath = strings.Join(parts[1:], "/")
-		} else {
-			// 默认 Docker Hub
-			registryHost = "registry-1.docker.io"
-			imagePath = strings.Trim(rawImage, "/")
-			if !strings.Contains(imagePath, "/") {
-				imagePath = "library/" + imagePath
-			}
-		}
+	registryHost, imagePath := splitRegistry(rawImage, rawRegistry)
+	if registryHost == "registry-1.docker.io" && !strings.Contains(imagePath, "/") {
+		imagePath = "library/" + imagePath // Docker Hub 官方镜像
 	}
 
 	pattern, err := compileRegex(tagRegex)
@@ -207,16 +236,7 @@ func (s *ContainerSource) Fetch(ctx context.Context, cfg map[string]any) (*Resul
 		return nil, &NotFoundError{Msg: fmt.Sprintf("镜像 %s/%s 没有可用的 tag", registryHost, imagePath)}
 	}
 
-	var best string
-	for _, tag := range tags {
-		if pattern != nil && !pattern.MatchString(tag) {
-			continue
-		}
-		if best == "" || greaterVersion(tag, best) {
-			best = tag
-		}
-	}
-
+	best := pickMaxTag(tags, pattern)
 	if best == "" {
 		return nil, fmt.Errorf("没有匹配 tag_regex 的 tag")
 	}

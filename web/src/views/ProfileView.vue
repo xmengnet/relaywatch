@@ -1,10 +1,16 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
+import { useLocale } from '@/composables/useLocale'
+import { useFormat } from '@/composables/useFormat'
 import { getProfile, updateProfile, changePassword, listSessions, revokeSession, type SessionInfo } from '@/api/users'
 import type { User } from '@/api/types'
 
+const { t } = useI18n()
+const { formatDateTime } = useFormat()
 const auth = useAuthStore()
+const { locale, setLocale, localeOptions } = useLocale()
 
 const user = ref<User | null>(null)
 const isOidc = ref(false)
@@ -58,7 +64,7 @@ async function saveProfile() {
     const r = await updateProfile({ email: email.value, display_name: displayName.value })
     user.value = r.user
     auth.user = r.user
-    toast('资料已保存')
+    toast(t('profile.saved'))
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), 'error')
   } finally {
@@ -73,7 +79,7 @@ async function savePassword() {
   try {
     await changePassword({ old_password: oldPassword.value, new_password: newPassword.value })
     oldPassword.value = newPassword.value = newPassword2.value = ''
-    toast('密码已修改')
+    toast(t('profile.passwordChanged'))
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), 'error')
   } finally {
@@ -82,7 +88,7 @@ async function savePassword() {
 }
 
 async function kick(sess: SessionInfo) {
-  if (!window.confirm(sess.current ? '吊销当前会话将立即登出，确认？' : '吊销该会话？')) return
+  if (!window.confirm(sess.current ? t('profile.revokeCurrentConfirm') : t('profile.revokeConfirm'))) return
   revoking.value = sess.id
   try {
     await revokeSession(sess.id)
@@ -91,7 +97,7 @@ async function kick(sess: SessionInfo) {
       location.href = '/login'
       return
     }
-    toast('会话已吊销')
+    toast(t('profile.sessionRevoked'))
     await loadSessions()
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), 'error')
@@ -103,64 +109,78 @@ async function kick(sess: SessionInfo) {
 
 <template>
   <div>
-    <div class="text-h5 mb-4">个人资料</div>
+    <div class="text-h5 mb-4">{{ t('profile.title') }}</div>
 
     <v-card class="pa-6 mb-4" max-width="640">
-      <div class="text-subtitle-1 font-weight-medium mb-2">账户信息</div>
+      <div class="text-subtitle-1 font-weight-medium mb-2">{{ t('profile.accountInfo') }}</div>
       <div class="text-body-2 text-medium-emphasis mb-4">
-        用户名 {{ user?.username }} · 角色 {{ user?.role }}
-        <v-chip v-if="isOidc" size="small" variant="tonal" class="ms-2" prepend-icon="mdi-key-chain">OIDC 登录</v-chip>
+        {{ t('profile.usernameRole', { username: user?.username, role: user ? t(`roles.${user.role}`) : '' }) }}
+        <v-chip v-if="isOidc" size="small" variant="tonal" class="ms-2" prepend-icon="mdi-key-chain">{{ t('profile.oidcLogin') }}</v-chip>
       </div>
       <v-form ref="profileForm" @submit.prevent="saveProfile">
-        <v-text-field v-model="displayName" label="显示名" class="mb-2" />
-        <v-text-field v-model="email" label="邮箱" type="email" class="mb-2" />
+        <v-text-field v-model="displayName" :label="t('profile.displayName')" class="mb-2" />
+        <v-text-field v-model="email" :label="t('profile.email')" type="email" class="mb-2" />
         <div class="d-flex justify-end">
-          <v-btn color="primary" :loading="savingProfile" @click="saveProfile">保存</v-btn>
+          <v-btn color="primary" :loading="savingProfile" @click="saveProfile">{{ t('common.save') }}</v-btn>
         </div>
       </v-form>
     </v-card>
 
+    <v-card class="pa-6 mb-4" max-width="640">
+      <div class="text-subtitle-1 font-weight-medium mb-2">{{ t('common.language') }}</div>
+      <div class="text-body-2 text-medium-emphasis mb-4">{{ t('profile.languageHint') }}</div>
+      <v-select
+        :model-value="locale"
+        :items="localeOptions"
+        item-title="title"
+        item-value="value"
+        :label="t('profile.languageLabel')"
+        hide-details
+        @update:model-value="setLocale"
+      />
+    </v-card>
+
     <v-card v-if="!isOidc" class="pa-6 mb-4" max-width="640">
-      <div class="text-subtitle-1 font-weight-medium mb-2">修改密码</div>
-      <div class="text-body-2 text-medium-emphasis mb-4">修改成功后请重新登录其他设备；当前会话保持有效。</div>
+      <div class="text-subtitle-1 font-weight-medium mb-2">{{ t('profile.changePassword') }}</div>
+      <div class="text-body-2 text-medium-emphasis mb-4">{{ t('profile.passwordHint') }}</div>
       <v-form ref="pwForm" @submit.prevent="savePassword">
-        <v-text-field v-model="oldPassword" label="当前密码" type="password" :rules="[v => !!v || '必填']" class="mb-2" />
-        <v-text-field v-model="newPassword" label="新密码" type="password" :rules="[v => (v && v.length >= 8) || '至少 8 个字符']" class="mb-2" />
+        <v-text-field v-model="oldPassword" :label="t('profile.currentPassword')" type="password" :rules="[v => !!v || t('profile.required')]" class="mb-2" />
+        <v-text-field v-model="newPassword" :label="t('profile.newPassword')" type="password" :rules="[v => (v && v.length >= 8) || t('common.atLeast8')]" class="mb-2" />
         <v-text-field
-          v-model="newPassword2" label="确认新密码" type="password"
-          :rules="[v => v === newPassword || '两次输入不一致']" class="mb-2"
+          v-model="newPassword2" :label="t('profile.confirmNewPassword')" type="password"
+          :rules="[v => v === newPassword || t('profile.passwordMismatch')]" class="mb-2"
         />
         <div class="d-flex justify-end">
-          <v-btn color="primary" :loading="savingPassword" @click="savePassword">修改密码</v-btn>
+          <v-btn color="primary" :loading="savingPassword" @click="savePassword">{{ t('profile.changePassword') }}</v-btn>
         </div>
       </v-form>
     </v-card>
 
     <v-alert v-else class="mb-4" max-width="640" type="info" variant="tonal">
-      当前账户通过 OIDC 登录，密码由身份提供方管理。
+      {{ t('profile.oidcPasswordHint') }}
     </v-alert>
 
     <v-card class="pa-6" max-width="640">
-      <div class="text-subtitle-1 font-weight-medium mb-2">登录会话</div>
-      <div class="text-body-2 text-medium-emphasis mb-4">当前账户的全部有效会话；发现陌生设备可立即吊销。</div>
+      <div class="text-subtitle-1 font-weight-medium mb-2">{{ t('profile.sessions') }}</div>
+      <div class="text-body-2 text-medium-emphasis mb-4">{{ t('profile.sessionsHint') }}</div>
       <v-list v-if="sessions.length" density="compact">
         <v-list-item v-for="s in sessions" :key="s.id">
           <v-list-item-title class="d-flex align-center ga-2 text-body-2">
-            <v-chip v-if="s.current" size="x-small" color="success" label>当前</v-chip>
-            <span class="text-truncate" style="max-width: 360px">{{ s.user_agent || '未知设备' }}</span>
+            <v-chip v-if="s.current" size="x-small" color="success" label>{{ t('common.current') }}</v-chip>
+            <span class="text-truncate" style="max-width: 360px">{{ s.user_agent || t('common.unknownDevice') }}</span>
           </v-list-item-title>
           <v-list-item-subtitle class="text-caption">
-            {{ s.ip || '未知 IP' }} · 登录于 {{ new Date(s.created_at).toLocaleString() }}
+            {{ s.ip || t('common.unknownIp') }} · {{ t('profile.loggedInAt', { time: formatDateTime(s.created_at) }) }}
           </v-list-item-subtitle>
           <template #append>
             <v-btn
               icon="mdi-logout" size="small" variant="text" color="warning"
-              :aria-label="s.current ? '登出' : '吊销会话'" :loading="revoking === s.id" @click="kick(s)"
+              :aria-label="s.current ? t('auth.logout') : t('profile.revoke')" :loading="revoking === s.id" @click="kick(s)"
             />
           </template>
         </v-list-item>
       </v-list>
-      <div v-else class="text-medium-emphasis py-2 text-body-2">无有效会话</div>
+      <div v-else class="text-medium-emphasis py-2 text-body-2">{{ t('profile.noSessions') }}</div>
     </v-card>
 
     <v-snackbar v-model="snackbar" :color="snackbarColor" location="top right" :timeout="4000">

@@ -511,4 +511,3 @@ func (s *HackageSource) Fetch(ctx context.Context, cfg map[string]any) (*Result,
 		URL:     fmt.Sprintf("https://hackage.haskell.org/package/%s-%s", pkg, ver),
 	}, nil
 }
-

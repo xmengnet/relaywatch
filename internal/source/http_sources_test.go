@@ -227,3 +227,77 @@ func TestDockerTagSource(t *testing.T) {
 		t.Errorf("got url %q", res.URL)
 	}
 }
+
+func TestDockerTagSourceRegistry(t *testing.T) {
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/":
+			// OCI 探针：要求 Bearer 鉴权
+			w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="%s/token",service="test-registry"`, ts.URL))
+			w.WriteHeader(http.StatusUnauthorized)
+		case r.URL.Path == "/token":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintln(w, `{"token": "test-mock-token"}`)
+		case r.URL.Path == "/v2/myorg/myimage/tags/list":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintln(w, `{"name": "myorg/myimage", "tags": ["1.0.0", "1.2.0", "1.1.0", "latest"]}`)
+		case r.URL.Path == "/v2/repositories/library/nginx/tags":
+			// Docker Hub 分页接口（被镜像规则重定向到本测试服务器）
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintln(w, `{"results": [{"name": "1.30.0"}, {"name": "latest"}], "next": ""}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	host := ts.Listener.Addr().String()
+	ctx := context.Background()
+	s := &DockerTagSource{}
+
+	// 1. registry 字段生效：非 Docker Hub 走标准 OCI tags API
+	res, err := s.Fetch(ctx, map[string]any{
+		"registry":  host,
+		"image":     "myorg/myimage",
+		"tag_regex": `^[0-9.]+$`, // 排除 latest
+	})
+	if err != nil {
+		t.Fatalf("registry fetch error: %v", err)
+	}
+	if res.Version != "1.2.0" {
+		t.Errorf("got %q, want 1.2.0", res.Version)
+	}
+	if want := "https://" + host + "/myorg/myimage"; res.URL != want {
+		t.Errorf("got url %q, want %q", res.URL, want)
+	}
+
+	// 2. registry 带 scheme / 尾部斜杠也能识别
+	if res, err = s.Fetch(ctx, map[string]any{
+		"registry": ts.URL + "/",
+		"image":    "myorg/myimage",
+	}); err != nil || res.Version != "1.2.0" {
+		t.Errorf("scheme-prefixed registry: res %v, err %v", res, err)
+	}
+
+	// 3. 不填 registry、镜像名自带域名：同样走 OCI，且域名被剥离
+	if res, err = s.Fetch(ctx, map[string]any{
+		"image": host + "/myorg/myimage",
+	}); err != nil || res.Version != "1.2.0" {
+		t.Errorf("image with domain: res %v, err %v", res, err)
+	}
+
+	// 4. Docker Hub 别名（docker.io）仍走 hub.docker.com 分页接口
+	SetSiteConfig([]MirrorRule{{From: "https://hub.docker.com", To: ts.URL}}, nil)
+	defer SetSiteConfig(nil, nil)
+	res, err = s.Fetch(ctx, map[string]any{"registry": "docker.io", "image": "nginx", "tag_regex": `^[0-9.]+$`})
+	if err != nil {
+		t.Fatalf("docker.io alias error: %v", err)
+	}
+	if res.Version != "1.30.0" {
+		t.Errorf("got %q, want 1.30.0", res.Version)
+	}
+	if res.URL != "https://hub.docker.com/r/library/nginx" {
+		t.Errorf("got url %q", res.URL)
+	}
+}

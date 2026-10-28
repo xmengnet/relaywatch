@@ -12,7 +12,6 @@ import (
 	"relaywatch/internal/store"
 )
 
-
 // authUser 从请求上下文取当前用户（RequireAuth 已保证非 nil）。
 func authUser(r *http.Request) *store.User {
 	return auth.UserFromContext(r.Context())

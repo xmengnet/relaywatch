@@ -21,8 +21,8 @@ type SecretBox interface {
 
 // sqliteStore 是 Store 的 SQLite 实现。
 type sqliteStore struct {
-	db   *sqlDB
-	box  SecretBox
+	db  *sqlDB
+	box SecretBox
 }
 
 // Store 数据访问接口。M1 覆盖用户/会话/Token/监控；其余随里程碑扩展。

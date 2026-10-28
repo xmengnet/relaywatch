@@ -10,3 +10,6 @@ export const i18n = createI18n({
   fallbackLocale: 'zh-Hans',
   messages: { 'zh-Hans': zhHans, en },
 })
+
+// <html lang> 与生效语言保持一致（后续切换由 useLocale 同步）
+document.documentElement.lang = i18n.global.locale.value === 'en' ? 'en' : 'zh-Hans'

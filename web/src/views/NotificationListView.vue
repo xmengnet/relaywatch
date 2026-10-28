@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { listDeliveries, resendDelivery, type Delivery } from '@/api/channels'
 import RelativeTime from '@/components/RelativeTime.vue'
+
+const { t } = useI18n()
 
 const loading = ref(true)
 const items = ref<Delivery[]>([])
@@ -13,27 +16,37 @@ const snackbar = ref(false)
 const snackbarText = ref('')
 const snackbarColor = ref('success')
 
-const statusOptions = [
-  { title: '全部', value: '' },
-  { title: '待投递', value: 'pending' },
-  { title: '已送达', value: 'sent' },
-  { title: '失败', value: 'failed' },
-  { title: '已推迟', value: 'deferred' },
-  { title: '已取消', value: 'canceled' },
-]
+const statusOptions = computed(() => [
+  { title: t('notifications.all'), value: '' },
+  { title: t('notifications.statuses.pending'), value: 'pending' },
+  { title: t('notifications.statuses.sent'), value: 'sent' },
+  { title: t('notifications.statuses.failed'), value: 'failed' },
+  { title: t('notifications.statuses.deferred'), value: 'deferred' },
+  { title: t('notifications.statuses.canceled'), value: 'canceled' },
+])
 
-const statusMeta: Record<string, { color: string; text: string }> = {
-  pending: { color: 'info', text: '待投递' },
-  sent: { color: 'success', text: '已送达' },
-  failed: { color: 'error', text: '失败' },
-  deferred: { color: 'warning', text: '已推迟' },
-  canceled: { color: 'default', text: '已取消' },
-}
+const statusMeta = computed<Record<string, { color: string; text: string }>>(() => ({
+  pending: { color: 'info', text: t('notifications.statuses.pending') },
+  sent: { color: 'success', text: t('notifications.statuses.sent') },
+  failed: { color: 'error', text: t('notifications.statuses.failed') },
+  deferred: { color: 'warning', text: t('notifications.statuses.deferred') },
+  canceled: { color: 'default', text: t('notifications.statuses.canceled') },
+}))
 
-const kindMeta: Record<string, { color: string; text: string }> = {
-  update: { color: 'primary', text: '版本更新' },
-  compare: { color: 'deep-purple', text: '版本对比' },
-}
+const kindMeta = computed<Record<string, { color: string; text: string }>>(() => ({
+  update: { color: 'primary', text: t('notifications.kinds.update') },
+  compare: { color: 'deep-purple', text: t('notifications.kinds.compare') },
+}))
+
+const headers = computed<Array<{ title: string; key: string; sortable: boolean; align?: 'end' }>>(() => [
+  { title: t('notifications.headers.time'), key: 'created_at', sortable: false },
+  { title: t('notifications.headers.monitor'), key: 'monitor_id', sortable: false },
+  { title: t('notifications.headers.event'), key: 'kind', sortable: false },
+  { title: t('notifications.headers.channel'), key: 'channel_id', sortable: false },
+  { title: t('notifications.headers.status'), key: 'status', sortable: false },
+  { title: t('notifications.headers.error'), key: 'last_error', sortable: false },
+  { title: t('notifications.headers.actions'), key: 'actions', sortable: false, align: 'end' },
+])
 
 async function load() {
   loading.value = true
@@ -56,7 +69,9 @@ watch([statusFilter], () => { page.value = 1; load() })
 async function doResend(d: Delivery) {
   try {
     const r = await resendDelivery(d.id)
-    snackbarText.value = r.status === 'sent' ? '重发成功' : `重发结果：${r.status} ${r.last_error ?? ''}`
+    snackbarText.value = r.status === 'sent'
+      ? t('notifications.resendSuccess')
+      : t('notifications.resendResult', { status: r.status, error: r.last_error ?? '' })
     snackbarColor.value = r.status === 'sent' ? 'success' : 'error'
     snackbar.value = true
     await load()
@@ -75,14 +90,14 @@ function canResend(d: Delivery) {
 <template>
   <div>
     <div class="d-flex align-center flex-wrap ga-2 mb-4">
-      <div class="text-h5">通知历史</div>
+      <div class="text-h5">{{ t('notifications.title') }}</div>
       <v-spacer />
       <v-select
         v-model="statusFilter"
         :items="statusOptions"
         item-title="title"
         item-value="value"
-        label="状态"
+        :label="t('notifications.statusLabel')"
         density="comfortable"
         hide-details
         style="max-width: 160px"
@@ -92,15 +107,7 @@ function canResend(d: Delivery) {
     <v-data-table-server
       v-model:items-per-page="perPage"
       v-model:page="page"
-      :headers="[
-        { title: '时间', key: 'created_at', sortable: false },
-        { title: '监控', key: 'monitor_id', sortable: false },
-        { title: '事件', key: 'kind', sortable: false },
-        { title: '渠道', key: 'channel_id', sortable: false },
-        { title: '状态', key: 'status', sortable: false },
-        { title: '错误', key: 'last_error', sortable: false },
-        { title: '操作', key: 'actions', sortable: false, align: 'end' },
-      ]"
+      :headers="headers"
       :items="items"
       :items-length="total"
       :loading="loading"
@@ -139,10 +146,10 @@ function canResend(d: Delivery) {
           variant="text"
           prepend-icon="mdi-send-clock"
           @click="doResend(item)"
-        >重发</v-btn>
+        >{{ t('notifications.resend') }}</v-btn>
       </template>
       <template #no-data>
-        <div class="text-medium-emphasis py-6">暂无投递记录</div>
+        <div class="text-medium-emphasis py-6">{{ t('notifications.empty') }}</div>
       </template>
     </v-data-table-server>
 

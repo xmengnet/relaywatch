@@ -132,9 +132,9 @@ func (s *OIDCService) Complete(ctx context.Context, providerName, state, code st
 		return nil, fmt.Errorf("id_token 校验失败: %w", err)
 	}
 	var claims struct {
-		Sub   string   `json:"sub"`
-		Name  string   `json:"name"`
-		Email string   `json:"email"`
+		Sub   string         `json:"sub"`
+		Name  string         `json:"name"`
+		Email string         `json:"email"`
 		Other map[string]any `json:"-"`
 	}
 	if err := idToken.Claims(&claims); err != nil {

@@ -50,8 +50,8 @@ type User struct {
 	Username     string
 	Email        string
 	DisplayName  string
-	PasswordHash []byte // OIDC 用户为 nil
-	Role         string // admin | user | viewer
+	PasswordHash []byte   // OIDC 用户为 nil
+	Role         string   // admin | user | viewer
 	Permissions  []string // 细粒度操作权限（见 Permission* 常量）；nil = 未配置（按角色默认）
 	OIDCProvider string
 	OIDCSubject  string
@@ -201,11 +201,11 @@ type Channel struct {
 type DeliveryStatus string
 
 const (
-	DeliveryPending   DeliveryStatus = "pending"
-	DeliverySent      DeliveryStatus = "sent"
-	DeliveryFailed    DeliveryStatus = "failed"
-	DeliveryDeferred  DeliveryStatus = "deferred" // 静默期推迟
-	DeliveryCanceled  DeliveryStatus = "canceled" // 作废（终态）
+	DeliveryPending  DeliveryStatus = "pending"
+	DeliverySent     DeliveryStatus = "sent"
+	DeliveryFailed   DeliveryStatus = "failed"
+	DeliveryDeferred DeliveryStatus = "deferred" // 静默期推迟
+	DeliveryCanceled DeliveryStatus = "canceled" // 作废（终态）
 )
 
 // Delivery 一条通知投递任务/记录。

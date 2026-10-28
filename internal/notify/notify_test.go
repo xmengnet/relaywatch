@@ -95,7 +95,7 @@ func TestDispatcherCooldown(t *testing.T) {
 	if dl[0].Status != store.DeliveryDeferred {
 		t.Errorf("status = %s, want deferred", dl[0].Status)
 	}
-	if dl[0].NextAttemptAt.Before(now.Add(59*time.Minute)) {
+	if dl[0].NextAttemptAt.Before(now.Add(59 * time.Minute)) {
 		t.Errorf("next_attempt = %v, want ~1h later", dl[0].NextAttemptAt)
 	}
 

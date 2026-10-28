@@ -2714,13 +2714,13 @@ UPDATE monitors SET owner_id = (SELECT id FROM users WHERE role='admin' ORDER BY
 
 ### 19.5 注册与账户生命周期
 
-#### 注册开关（admin 系统设置项）
+#### 注册开关（admin「网站管理」项）
 
 | 设置 | 默认 | 说明 |
 |---|---|---|
 | `registration.enabled` | `false` | 关闭时 `/register` 返回 404，登录页不显示注册入口 |
 | `registration.default_role` | `user` | 自助注册用户的初始角色（user 或 viewer） |
-| `registration.require_email` | `false` | 注册是否必填邮箱（无邮箱验证流程，见 §19.10 明确不做） |
+| `registration.require_email` | `false` | 注册需邮箱验证码（M8.2：走全局邮件发送 6 位码，10 分钟有效、一次性、同邮箱 60s 限流） |
 | `oidc.default_role` | `viewer` | OIDC 首次登录自动建号的默认角色 |
 
 注册流程复用现有本地账户体系：
@@ -2821,7 +2821,7 @@ UPDATE monitors SET owner_id = (SELECT id FROM users WHERE role='admin' ORDER BY
 
 ### 19.10 明确不做
 
-- 邮箱验证 / 找回密码邮件流（自托管场景收益低；忘记密码由 admin 重置覆盖）
+- 找回密码邮件流（忘记密码由 admin 重置覆盖；注册邮箱验证已随 M8.2 全局邮件配置落地）
 - 组织 / 团队 / 逐条 ACL（若未来需要，owner_id 可平滑升级为 team_id）
 - 注册审批流（邀请码机制）（开关足够，需要更强控制时用 admin 手工建号）
 - 用户自助删除账户（数据转移语义复杂，由 admin 处理）
@@ -2846,3 +2846,35 @@ UPDATE monitors SET owner_id = (SELECT id FROM users WHERE role='admin' ORDER BY
 - 用户管理 API 的 create/patch 接受 `permissions`；adminUserResponse 返回（null 表示按角色默认，前端提示）
 - 明确不做：自定义任意权限项（新需求时在 AllPermissions 常量扩展）、按资源（单条监控）级 ACL
 
+## 20. 帮助中心与渠道模板助手设计（规划）
+
+详见专项设计文档：[`docs/help-system-design.md`](./help-system-design.md)。
+
+### 20.1 核心目标
+解决 33 种监控源、13 种推送渠道以及多级过滤、双轨对比等高级特性的上手门槛，提供「全局帮助中心页面 + 渠道编辑就地模板助手 + 批量导入预设」三位一体的使用体验。
+
+### 20.2 交付物要点
+1. **全局帮助中心页面（`/help` 路由）**：
+   - 入口：侧边栏导航「帮助中心」（`mdi-help-circle-outline`）与顶部 AppBar 帮助图标；
+   - 模块：3 步快速上手、33 种监控源参考手册（分类与搜索）、13 种渠道推送指南与 Go 模板速查、双轨版本对比工作流、nvchecker TOML 映射对照表、版本清洗与正则重写技巧。
+2. **渠道编辑「模板助手与预设实例」（`ChannelListView.vue`）**：
+   - 展开式「模板写法与预设实例」助手卡片；
+   - 变量快速插入芯片（按监控、版本、对比分类）；
+   - 4 套开箱即用预设模板（标准卡片、单行紧凑版、Markdown 卡片版、双轨对比专用版），支持一键套用；
+   - 直达帮助中心的深度链接（`/help?tab=channels`）。
+
+### 19.12 全局邮件配置与注册邮箱验证（M8.2 增量）
+
+**全局邮件（SMTP）**：系统级发件通道，与通知渠道无关，仅 admin 在「网站管理」维护。
+
+- 配置存 settings（`mail.smtp`，密码字段经 SecretBox AES-GCM 加密）：host/port/username/from/encryption(starttls|ssl|none)
+- 底层复用 `notifier.SendSystemMailRaw`（与渠道投递共用同一套 SSL/STARTTLS/明文实现）
+- 支持发送测试邮件（发到发件人自身）；密码不回传，仅返回 `password_set`
+- 端点：`GET/PUT /api/v1/mail-config`、`POST /api/v1/mail-config/test`（均 admin）
+
+**注册邮箱验证**：`registration.require_email` 开启时，注册流程变两步：
+
+1. `POST /api/v1/auth/register/send-code`（匿名）：生成 6 位验证码发到邮箱；10 分钟有效、一次性消费、同邮箱 60 秒限流；全局邮件未配置时返回 503
+2. `POST /api/v1/auth/register` 携带 `email_code`，服务端校验通过才建号
+
+明确定位：登录本身不加二次邮件认证（自托管场景过重，强认证由 OIDC 覆盖）。

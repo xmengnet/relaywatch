@@ -100,3 +100,17 @@ func smtpSend(c *smtp.Client, from string, to []string, msg []byte) error {
 	}
 	return c.Quit()
 }
+
+// SendSystemMailRaw 系统邮件出口（注册验证码等非通知渠道邮件）。
+// encryption: ssl | starttls | none；供 httpapi 的全局邮件配置复用，
+// 与渠道投递共用同一套底层实现。
+func SendSystemMailRaw(ctx context.Context, addr, host, encryption string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	switch encryption {
+	case "ssl":
+		return sendSMTPS(addr, host, auth, from, to, msg)
+	case "none":
+		return sendSMTPPlain(ctx, addr, auth, from, to, msg)
+	default:
+		return sendSMTPStartTLS(ctx, addr, host, auth, from, to, msg)
+	}
+}

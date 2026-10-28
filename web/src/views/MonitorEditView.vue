@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import SourceConfigForm from '@/components/SourceConfigForm.vue'
 import { createMonitor, getMonitor, listMonitors, updateMonitor, type MonitorPayload } from '@/api/monitors'
 import { listChannels, type Channel } from '@/api/channels'
 
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 
@@ -35,15 +37,15 @@ const allChannels = ref<Channel[]>([])
 const selectedChannels = ref<number[]>([])
 const referenceOptions = ref<Array<{ title: string; value: number | null }>>([])
 
-const intervalOptions = [
-  { title: '1 分钟', value: 60 },
-  { title: '5 分钟', value: 300 },
-  { title: '15 分钟', value: 900 },
-  { title: '30 分钟', value: 1800 },
-  { title: '1 小时', value: 3600 },
-  { title: '6 小时', value: 21600 },
-  { title: '1 天', value: 86400 },
-]
+const intervalOptions = computed(() => [
+  { title: t('monitors.intervals.m1'), value: 60 },
+  { title: t('monitors.intervals.m5'), value: 300 },
+  { title: t('monitors.intervals.m15'), value: 900 },
+  { title: t('monitors.intervals.m30'), value: 1800 },
+  { title: t('monitors.intervals.h1'), value: 3600 },
+  { title: t('monitors.intervals.h6'), value: 21600 },
+  { title: t('monitors.intervals.d1'), value: 86400 },
+])
 
 const tagsText = ref('')
 function parseTags(): string[] {
@@ -56,7 +58,7 @@ onMounted(async () => {
     const currentId = route.params.id ? Number(route.params.id) : null
     const valid = r.items.filter(item => item.id !== currentId && !item.reference_monitor_id)
     referenceOptions.value = [
-      { title: '无（不开启版本对比）', value: null },
+      { title: t('monitors.edit.noReference'), value: null },
       ...valid.map(item => ({
         title: `${item.name} (${item.source_type})`,
         value: item.id,
@@ -134,22 +136,22 @@ async function submit() {
 
 <template>
   <div class="d-flex align-center mb-4">
-    <v-btn icon="mdi-arrow-left" variant="text" to="/monitors" aria-label="返回" />
-    <div class="text-h5">{{ isEdit ? '编辑监控' : '新建监控' }}</div>
+    <v-btn icon="mdi-arrow-left" variant="text" to="/monitors" :aria-label="t('common.back')" />
+    <div class="text-h5">{{ isEdit ? t('monitors.editTitle') : t('monitors.newTitle') }}</div>
   </div>
 
   <v-form ref="form" @submit.prevent="submit">
     <v-row>
       <v-col cols="12" md="8">
         <v-card class="pa-6 mb-4">
-          <div class="text-subtitle-1 font-weight-medium mb-4">基本信息</div>
-          <v-text-field v-model="state.name" label="名称 *" :rules="[v => !!v || '名称不能为空']" required />
-          <v-text-field v-model="tagsText" label="标签" hint="逗号或空格分隔" persistent-hint />
-          <v-textarea v-model="state.note" label="备注" rows="2" />
+          <div class="text-subtitle-1 font-weight-medium mb-4">{{ t('monitors.edit.basic') }}</div>
+          <v-text-field v-model="state.name" :label="t('monitors.edit.name') + ' *'" :rules="[v => !!v || t('monitors.edit.nameRequired')]" required />
+          <v-text-field v-model="tagsText" :label="t('monitors.edit.tags')" :hint="t('monitors.edit.tagsHint')" persistent-hint />
+          <v-textarea v-model="state.note" :label="t('monitors.edit.note')" rows="2" />
         </v-card>
 
         <v-card class="pa-6 mb-4">
-          <div class="text-subtitle-1 font-weight-medium mb-4">监控源</div>
+          <div class="text-subtitle-1 font-weight-medium mb-4">{{ t('monitors.edit.source') }}</div>
           <SourceConfigForm
             v-model:source-type="state.source_type"
             v-model="state.source_config"
@@ -157,62 +159,60 @@ async function submit() {
         </v-card>
 
         <v-card class="pa-6 mb-4">
-          <div class="text-subtitle-1 font-weight-medium mb-4">版本处理</div>
+          <div class="text-subtitle-1 font-weight-medium mb-4">{{ t('monitors.edit.versionProcessing') }}</div>
           <v-row>
             <v-col cols="6">
-              <v-text-field v-model="state.version_prefix" label="前缀剥离" hint="如 v" persistent-hint />
+              <v-text-field v-model="state.version_prefix" :label="t('monitors.edit.prefix')" :hint="t('monitors.edit.prefixHint')" persistent-hint />
             </v-col>
             <v-col cols="6">
-              <v-text-field v-model="state.version_suffix" label="后缀剥离" hint="如 -1" persistent-hint />
+              <v-text-field v-model="state.version_suffix" :label="t('monitors.edit.suffix')" :hint="t('monitors.edit.suffixHint')" persistent-hint />
             </v-col>
             <v-col cols="6">
-              <v-text-field v-model="state.version_include_regex" label="只跟踪匹配" hint="正则，如 ^1\." persistent-hint />
+              <v-text-field v-model="state.version_include_regex" :label="t('monitors.edit.include')" :hint="t('monitors.edit.includeHint')" persistent-hint />
             </v-col>
             <v-col cols="6">
-              <v-text-field v-model="state.version_ignore_regex" label="忽略匹配" hint="正则，如 nightly" persistent-hint />
+              <v-text-field v-model="state.version_ignore_regex" :label="t('monitors.edit.ignore')" :hint="t('monitors.edit.ignoreHint')" persistent-hint />
             </v-col>
             <v-col cols="6">
-              <v-text-field v-model="state.from_pattern" label="正则重写匹配 (from_pattern)" hint="如 (\d{4})(\d{2})(\d{2})；可选" persistent-hint />
+              <v-text-field v-model="state.from_pattern" :label="t('monitors.edit.fromPattern')" :hint="t('monitors.edit.fromHint')" persistent-hint />
             </v-col>
             <v-col cols="6">
-              <v-text-field v-model="state.to_pattern" label="正则重写替换 (to_pattern)" hint="如 \1.\2.\3 或 $1.$2.$3；可选" persistent-hint />
+              <v-text-field v-model="state.to_pattern" :label="t('monitors.edit.toPattern')" :hint="t('monitors.edit.toHint')" persistent-hint />
             </v-col>
           </v-row>
         </v-card>
 
         <v-card class="pa-6 mb-4">
-          <div class="text-subtitle-1 font-weight-medium mb-1">版本对比（参照监控）</div>
-          <div class="text-body-2 text-medium-emphasis mb-4">
-            将当前监控（如 AUR 打包）绑定一个上游参照（如 GitHub Release）。系统会在每次检查后自动对比两侧版本，并在落后或追平时触发提醒（AUR 源自动对齐 pkgrel）。
-          </div>
+          <div class="text-subtitle-1 font-weight-medium mb-1">{{ t('monitors.edit.compare') }}</div>
+          <div class="text-body-2 text-medium-emphasis mb-4">{{ t('monitors.edit.compareDesc') }}</div>
           <v-select
             v-model="state.reference_monitor_id"
             :items="referenceOptions"
             item-title="title"
             item-value="value"
-            label="上游参照监控"
-            hint="仅支持选择无上游参照的单层监控"
+            :label="t('monitors.edit.reference')"
+            :hint="t('monitors.edit.referenceHint')"
             persistent-hint
           />
         </v-card>
 
         <v-card class="pa-6">
-          <div class="text-subtitle-1 font-weight-medium mb-4">检查设置</div>
+          <div class="text-subtitle-1 font-weight-medium mb-4">{{ t('monitors.edit.checkSettings') }}</div>
           <v-row>
             <v-col cols="12" md="6">
-              <v-select v-model="state.interval_sec" :items="intervalOptions" item-title="title" item-value="value" label="检查间隔" />
+              <v-select v-model="state.interval_sec" :items="intervalOptions" item-title="title" item-value="value" :label="t('monitors.edit.interval')" />
             </v-col>
             <v-col cols="12" md="6">
-              <v-text-field v-model.number="state.notify_cooldown_sec" label="通知静默期（秒）" type="number" min="0" hint="同一变更周期内的合并间隔" persistent-hint />
+              <v-text-field v-model.number="state.notify_cooldown_sec" :label="t('monitors.edit.cooldown')" type="number" min="0" :hint="t('monitors.edit.cooldownHint')" persistent-hint />
             </v-col>
           </v-row>
-          <v-switch v-model="state.enabled" label="启用" color="primary" />
+          <v-switch v-model="state.enabled" :label="t('monitors.edit.enabled')" color="primary" />
         </v-card>
 
         <v-card class="pa-6">
-          <div class="text-subtitle-1 font-weight-medium mb-4">通知渠道</div>
+          <div class="text-subtitle-1 font-weight-medium mb-4">{{ t('monitors.edit.channels') }}</div>
           <div v-if="!allChannels.length" class="text-medium-emphasis mb-2">
-            还没有渠道。<router-link to="/channels">去创建</router-link>
+            {{ t('monitors.edit.noChannels') }}<router-link to="/channels">{{ t('monitors.edit.goCreate') }}</router-link>
           </div>
           <v-checkbox
             v-for="c in allChannels"
@@ -230,8 +230,8 @@ async function submit() {
       <v-col cols="12" md="4">
         <v-card class="pa-6 position-sticky" style="top: 80px">
           <v-alert v-if="errorMsg" type="error" density="compact" class="mb-4">{{ errorMsg }}</v-alert>
-          <v-btn type="submit" block color="primary" :loading="saving">保存</v-btn>
-          <v-btn block variant="text" class="mt-2" to="/monitors">取消</v-btn>
+          <v-btn type="submit" block color="primary" :loading="saving">{{ t('common.save') }}</v-btn>
+          <v-btn block variant="text" class="mt-2" to="/monitors">{{ t('common.cancel') }}</v-btn>
         </v-card>
       </v-col>
     </v-row>

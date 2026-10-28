@@ -1,0 +1,232 @@
+package httpapi
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/smtp"
+	"strings"
+	"time"
+
+	"relaywatch/internal/notifier"
+	"relaywatch/internal/store"
+)
+
+// MailConfigHandler 全局邮件（SMTP）配置：系统邮件（注册验证码等）的
+// 独立发件通道，与通知渠道无关。仅 admin 可读写。
+type MailConfigHandler struct {
+	St  store.Store
+	Box store.SecretBox // 敏感字段加解密（nil = 明文，仅测试）
+}
+
+const (
+	settingMailConfig   = "mail.smtp" // JSON（password 字段 AES-GCM 加密）
+	settingMailPassword = "mail.smtp.password_enc"
+)
+
+func (h *MailConfigHandler) routes(r chiRouterIface) {
+	r.Get("/mail-config", h.get)
+	r.Put("/mail-config", h.put)
+	r.Post("/mail-config/test", h.test)
+}
+
+type mailConfig struct {
+	Host       string `json:"host"`
+	Port       string `json:"port"`
+	Username   string `json:"username"`
+	From       string `json:"from"`
+	Encryption string `json:"encryption"` // starttls | ssl | none
+}
+
+type storedMailConfig struct {
+	mailConfig
+	PasswordEnc string `json:"password_enc"` // 落库前由 secretbox 加密
+}
+
+func (h *MailConfigHandler) load(ctx context.Context) (*mailConfig, string, error) {
+	raw, err := h.St.GetSetting(ctx, settingMailConfig)
+	if err != nil || raw == "" {
+		return nil, "", store.ErrNotFound
+	}
+	var sc storedMailConfig
+	if err := json.Unmarshal([]byte(raw), &sc); err != nil {
+		return nil, "", err
+	}
+	pw := sc.PasswordEnc
+	if h.Box != nil && pw != "" {
+		if plain, err := h.Box.Decrypt(pw); err == nil {
+			pw = plain
+		}
+	}
+	return &sc.mailConfig, pw, nil
+}
+
+func (h *MailConfigHandler) get(w http.ResponseWriter, r *http.Request) {
+	cfg, _, err := h.load(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"config": mailConfig{Port: "587", Encryption: "starttls"}, "password_set": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"config":       cfg,
+		"password_set": h.passwordSet(r.Context()),
+	})
+}
+
+func (h *MailConfigHandler) passwordSet(ctx context.Context) bool {
+	_, pw, err := h.load(ctx)
+	return err == nil && pw != ""
+}
+
+func (h *MailConfigHandler) put(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host       string  `json:"host"`
+		Port       string  `json:"port"`
+		Username   string  `json:"username"`
+		Password   *string `json:"password"` // nil/空 = 不修改
+		From       string  `json:"from"`
+		Encryption string  `json:"encryption"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if strings.TrimSpace(req.Host) == "" || strings.TrimSpace(req.From) == "" {
+		writeError(w, http.StatusBadRequest, "SMTP 主机与发件人地址必填")
+		return
+	}
+	switch req.Encryption {
+	case "starttls", "ssl", "none", "":
+		if req.Encryption == "" {
+			req.Encryption = "starttls"
+		}
+	default:
+		writeError(w, http.StatusBadRequest, "encryption 只能是 starttls/ssl/none")
+		return
+	}
+
+	sc := storedMailConfig{mailConfig: mailConfig{
+		Host: strings.TrimSpace(req.Host), Port: req.Port,
+		Username: req.Username, From: strings.TrimSpace(req.From),
+		Encryption: req.Encryption,
+	}}
+	if req.Password != nil && *req.Password != "" {
+		sc.PasswordEnc = *req.Password
+		if h.Box != nil {
+			if enc, err := h.Box.Encrypt(*req.Password); err == nil {
+				sc.PasswordEnc = enc
+			}
+		}
+	} else if _, oldPw, err := h.load(r.Context()); err == nil && oldPw != "" {
+		// 留空 = 不修改：沿用旧密文（load 已解密，重新加密）
+		sc.PasswordEnc = oldPw
+		if h.Box != nil {
+			if enc, err := h.Box.Encrypt(oldPw); err == nil {
+				sc.PasswordEnc = enc
+			}
+		}
+	}
+	raw, _ := json.Marshal(sc)
+	if err := h.St.SetSetting(r.Context(), settingMailConfig, string(raw)); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	u := authUser(r)
+	_ = h.St.AddAudit(r.Context(), &store.AuditEntry{UserID: &u.ID, Action: "mail_config.update", IP: clientIP(r)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// test 用当前保存的配置发一封测试邮件到发件人自身。
+func (h *MailConfigHandler) test(w http.ResponseWriter, r *http.Request) {
+	cfg, pw, err := h.load(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "尚未配置邮件")
+		return
+	}
+	if err := sendSystemMail(r.Context(), cfg, pw, cfg.From, "RelayWatch 测试邮件", "全局邮件配置正确。这是一封来自 RelayWatch 的测试邮件。"); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---------- 系统邮件发送与验证码（供注册流程使用） ----------
+
+// SendSystemMail 对外暴露的系统邮件发送（handlers_auth 注册验证码用）。
+func SendSystemMail(ctx context.Context, st store.Store, to, subject, body string) error {
+	h := &MailConfigHandler{St: st}
+	cfg, pw, err := h.load(ctx)
+	if err != nil {
+		return fmt.Errorf("全局邮件未配置")
+	}
+	return sendSystemMail(ctx, cfg, pw, to, subject, body)
+}
+
+func sendSystemMail(ctx context.Context, cfg *mailConfig, password, to, subject, body string) error {
+	addr := cfg.Host + ":" + cfg.Port
+	content := strings.Join([]string{
+		"From: " + cfg.From,
+		"To: " + to,
+		"Subject: " + subject,
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		body,
+	}, "\r\n")
+	var auth smtp.Auth
+	if cfg.Username != "" && password != "" {
+		auth = smtp.PlainAuth("", cfg.Username, password, cfg.Host)
+	}
+	return notifier.SendSystemMailRaw(ctx, addr, cfg.Host, cfg.Encryption, auth, cfg.From, []string{to}, []byte(content))
+}
+
+// ---------- 注册邮箱验证码 ----------
+
+const settingRegCode = "registration.email_code" // JSON: {code, email, expires}
+
+type regCodeRecord struct {
+	Code    string `json:"code"`
+	Email   string `json:"email"`
+	Expires string `json:"expires"`
+	SentAt  string `json:"sent_at"` // 限流用：上次发送时间
+}
+
+// GenerateRegCode 生成 6 位验证码并落 settings（10 分钟有效），返回明文。
+func GenerateRegCode(ctx context.Context, st store.Store, email string) (string, error) {
+	b := make([]byte, 3)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	code := fmt.Sprintf("%06d", (int(b[0])<<16|int(b[1])<<8|int(b[2]))%1000000)
+	now := time.Now()
+	rec := regCodeRecord{Code: code, Email: strings.ToLower(email), Expires: now.Add(10 * time.Minute).UTC().Format(time.RFC3339), SentAt: now.UTC().Format(time.RFC3339)}
+	raw, _ := json.Marshal(rec)
+	if err := st.SetSetting(ctx, settingRegCode, string(raw)); err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// VerifyRegCode 校验并消费验证码（一次性）。
+func VerifyRegCode(ctx context.Context, st store.Store, email, code string) error {
+	raw, err := st.GetSetting(ctx, settingRegCode)
+	if err != nil || raw == "" {
+		return fmt.Errorf("请先获取验证码")
+	}
+	var rec regCodeRecord
+	_ = json.Unmarshal([]byte(raw), &rec)
+	if rec.Email != strings.ToLower(email) {
+		return fmt.Errorf("验证码与邮箱不匹配")
+	}
+	exp, _ := time.Parse(time.RFC3339, rec.Expires)
+	if time.Now().After(exp) {
+		return fmt.Errorf("验证码已过期，请重新获取")
+	}
+	if rec.Code != code {
+		return fmt.Errorf("验证码不正确")
+	}
+	_ = st.SetSetting(ctx, settingRegCode, "") // 消费
+	return nil
+}

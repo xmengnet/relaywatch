@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useFormat } from '@/composables/useFormat'
 
 const props = defineProps<{ time?: string | null }>()
 
+const { t, locale } = useI18n()
+const { formatDateTime } = useFormat()
+
 const display = ref('')
-const absolute = computed(() => (props.time ? new Date(props.time).toLocaleString() : ''))
+const absolute = computed(() => formatDateTime(props.time))
 
 function update() {
   if (!props.time) {
@@ -13,10 +18,10 @@ function update() {
   }
   const diff = Date.now() - new Date(props.time).getTime()
   const min = Math.floor(diff / 60000)
-  if (min < 1) display.value = '刚刚'
-  else if (min < 60) display.value = `${min} 分钟前`
-  else if (min < 1440) display.value = `${Math.floor(min / 60)} 小时前`
-  else display.value = `${Math.floor(min / 1440)} 天前`
+  if (min < 1) display.value = t('time.justNow')
+  else if (min < 60) display.value = t('time.minutesAgo', { n: min })
+  else if (min < 1440) display.value = t('time.hoursAgo', { n: Math.floor(min / 60) })
+  else display.value = t('time.daysAgo', { n: Math.floor(min / 1440) })
 }
 
 let timer: number | undefined
@@ -27,6 +32,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (timer) clearInterval(timer)
 })
+watch(locale, update)
 </script>
 
 <template>

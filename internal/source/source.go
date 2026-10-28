@@ -38,23 +38,28 @@ type Source interface {
 }
 
 // FieldSpec 描述源的一个配置字段，供前端动态渲染表单。
+// *En 字段由 meta_i18n.go 在 Metas() 输出时叠加，前端按当前语言选择。
 type FieldSpec struct {
-	Key         string   `json:"key"`
-	Label       string   `json:"label"`
-	Type        string   `json:"type"` // string | bool | int | select | secret
-	Required    bool     `json:"required"`
-	Default     any      `json:"default,omitempty"`
-	Options     []string `json:"options,omitempty"`
-	Placeholder string   `json:"placeholder,omitempty"`
-	Help        string   `json:"help,omitempty"`
+	Key           string   `json:"key"`
+	Label         string   `json:"label"`
+	LabelEn       string   `json:"label_en,omitempty"`
+	Type          string   `json:"type"` // string | bool | int | select | secret
+	Required      bool     `json:"required"`
+	Default       any      `json:"default,omitempty"`
+	Options       []string `json:"options,omitempty"`
+	Placeholder   string   `json:"placeholder,omitempty"`
+	PlaceholderEn string   `json:"placeholder_en,omitempty"`
+	Help          string   `json:"help,omitempty"`
+	HelpEn        string   `json:"help_en,omitempty"`
 }
 
 // Meta 源类型的元数据。
 type Meta struct {
-	Type   string      `json:"type"`
-	Label  string      `json:"label"`
-	Icon   string      `json:"icon,omitempty"`
-	Fields []FieldSpec `json:"fields"`
+	Type    string      `json:"type"`
+	Label   string      `json:"label"`
+	LabelEn string      `json:"label_en,omitempty"`
+	Icon    string      `json:"icon,omitempty"`
+	Fields  []FieldSpec `json:"fields"`
 }
 
 // MetaProvider 是能自我描述的源（全部内置源都实现）。
@@ -96,7 +101,9 @@ func (r *Registry) Metas() []Meta {
 	out := make([]Meta, 0, len(r.order))
 	for _, typ := range r.order {
 		if mp, ok := r.sources[typ].(MetaProvider); ok {
-			out = append(out, mp.Meta())
+			m := mp.Meta()
+			applyMetaEN(&m)
+			out = append(out, m)
 		}
 	}
 	return out

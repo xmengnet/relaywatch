@@ -50,12 +50,22 @@ export const useAuthStore = defineStore('auth', () => {
     setCsrf('')
   }
 
-  async function register(username: string, password: string, email?: string) {
+  async function register(username: string, password: string, email?: string, emailCode?: string) {
     const { register: registerApi } = await import('@/api/users')
-    const r = await registerApi({ username, password, email })
+    const r = await registerApi({ username, password, email, email_code: emailCode })
     user.value = r.user
     setCsrf(r.csrf_token)
   }
 
-  return { user, loaded, setupRequired, registrationOpen, load, login, setup, register, logout }
+  // 细粒度权限判定：admin 恒真；显式 permissions 优先；未配置按角色默认。
+  // 与后端 store.User.Can 语义一致，前端仅用于隐藏入口（服务端仍最终校验）。
+  function can(perm: string): boolean {
+    const u = user.value
+    if (!u) return false
+    if (u.role === 'admin') return true
+    const perms = u.permissions ?? (u.role === 'viewer' ? [] : ['monitor.create', 'channel.create', 'import', 'export'])
+    return perms.includes(perm)
+  }
+
+  return { user, loaded, setupRequired, registrationOpen, load, login, setup, register, logout, can }
 })

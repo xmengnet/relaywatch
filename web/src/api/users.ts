@@ -60,7 +60,11 @@ export function revokeSession(id: string) {
   return apiFetch<{ ok: boolean }>(`/profile/sessions/${id}`, { method: 'DELETE' })
 }
 
-export function register(p: { username: string; password: string; email?: string }) {
+export function sendRegisterCode(email: string) {
+  return apiFetch<{ ok: boolean }>('/auth/register/send-code', { method: 'POST', body: JSON.stringify({ email }) })
+}
+
+export function register(p: { username: string; password: string; email?: string; email_code?: string }) {
   return apiFetch<{ user: User; csrf_token: string }>('/auth/register', {
     method: 'POST',
     body: JSON.stringify(p),

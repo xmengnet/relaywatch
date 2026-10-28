@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"relaywatch/internal/auth"
 	"relaywatch/internal/store"
@@ -25,6 +28,12 @@ const (
 // registrationEnabled 注册开关（默认关闭）。
 func registrationEnabled(ctx context.Context, st store.Store) bool {
 	v, err := st.GetSetting(ctx, settingRegistrationEnabled)
+	return err == nil && v == "true"
+}
+
+// registrationNeedEmail 注册是否需邮箱验证码。
+func registrationNeedEmail(ctx context.Context, st store.Store) bool {
+	v, err := st.GetSetting(ctx, settingRegistrationNeedMail)
 	return err == nil && v == "true"
 }
 
@@ -146,6 +155,51 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// registerSendCode 发送注册邮箱验证码：注册开启 + require_email + 全局邮件已配置才可用。
+func (h *AuthHandler) registerSendCode(w http.ResponseWriter, r *http.Request) {
+	if !registrationEnabled(r.Context(), h.Store) {
+		writeError(w, http.StatusNotFound, "未开放注册")
+		return
+	}
+	if !registrationNeedEmail(r.Context(), h.Store) {
+		writeError(w, http.StatusBadRequest, "注册未开启邮箱验证")
+		return
+	}
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	email := strings.TrimSpace(req.Email)
+	if email == "" || !strings.Contains(email, "@") {
+		writeError(w, http.StatusBadRequest, "邮箱格式不正确")
+		return
+	}
+	// 防滥用：同一邮箱 60 秒内只发一次（上次发送时间记录在验证码记录里）
+	if raw, err := h.Store.GetSetting(r.Context(), settingRegCode); err == nil && raw != "" {
+		var rec regCodeRecord
+		if json.Unmarshal([]byte(raw), &rec) == nil && rec.Email == strings.ToLower(email) {
+			if sent, _ := time.Parse(time.RFC3339, rec.SentAt); time.Since(sent) < time.Minute {
+				writeError(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
+				return
+			}
+		}
+	}
+	code, err := GenerateRegCode(r.Context(), h.Store, email)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	body := fmt.Sprintf("你的 RelayWatch 注册验证码是：%s\n\n10 分钟内有效。如非本人操作请忽略本邮件。", code)
+	if err := SendSystemMail(r.Context(), h.Store, email, "RelayWatch 注册验证码", body); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "邮件发送失败："+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // register 自助注册：仅 registration.enabled 时开放；关闭时 404 防探测。
 func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
 	if !registrationEnabled(r.Context(), h.Store) {
@@ -153,9 +207,10 @@ func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Email    string `json:"email"`
+		Username  string `json:"username"`
+		Password  string `json:"password"`
+		Email     string `json:"email"`
+		EmailCode string `json:"email_code"` // require_email 开启时必填
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -168,6 +223,16 @@ func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.Store.UserByUsername(r.Context(), req.Username); err == nil {
 		writeError(w, http.StatusConflict, "用户名已被占用")
 		return
+	}
+	if registrationNeedEmail(r.Context(), h.Store) {
+		if strings.TrimSpace(req.Email) == "" {
+			writeError(w, http.StatusBadRequest, "注册需要邮箱")
+			return
+		}
+		if err := VerifyRegCode(r.Context(), h.Store, req.Email, req.EmailCode); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	u := &store.User{
 		Username: req.Username,

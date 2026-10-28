@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import StatusChip from '@/components/StatusChip.vue'
 import RelativeTime from '@/components/RelativeTime.vue'
 import VersionDiff from '@/components/VersionDiff.vue'
@@ -8,6 +9,7 @@ import { useSse } from '@/composables/useSse'
 import { getMonitor, checkNow, ackMonitor, listHistory, listChanges, type CheckHistoryItem, type VersionChangeItem } from '@/api/monitors'
 import type { Monitor } from '@/api/types'
 
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 
@@ -73,7 +75,9 @@ async function doCheck() {
   try {
     const r = await checkNow(id.value)
     checkResult.value = r
-    snackbarText.value = r.ok ? `检查成功：${r.version ?? '—'}（${r.duration_ms}ms）` : `检查失败：${r.error}`
+    snackbarText.value = r.ok
+      ? t('monitors.detail.checkSuccess', { version: r.version ?? '—', ms: r.duration_ms })
+      : t('monitors.detail.checkFailed', { error: r.error })
     snackbarColor.value = r.ok ? 'success' : 'error'
     snackbar.value = true
     await reload()
@@ -90,7 +94,7 @@ async function doAck() {
   acking.value = true
   try {
     await ackMonitor(id.value)
-    snackbarText.value = '已确认更新'
+    snackbarText.value = t('monitors.detail.ackSuccess')
     snackbarColor.value = 'success'
     snackbar.value = true
     await reload()
@@ -100,7 +104,7 @@ async function doAck() {
 }
 
 async function doDelete() {
-  if (!window.confirm(`删除监控「${monitor.value?.name}」？此操作不可恢复。`)) return
+  if (!window.confirm(t('monitors.detail.deleteConfirm', { name: monitor.value?.name }))) return
   await import('@/api/monitors').then(m => m.deleteMonitor(id.value))
   router.push('/monitors')
 }
@@ -109,56 +113,66 @@ async function doDelete() {
 <template>
   <div v-if="monitor">
     <div class="d-flex align-center flex-wrap ga-2 mb-4">
-      <v-btn icon="mdi-arrow-left" variant="text" to="/monitors" aria-label="返回" />
+      <v-btn icon="mdi-arrow-left" variant="text" to="/monitors" :aria-label="t('common.back')" />
       <div class="text-h5">{{ monitor.name }}</div>
       <StatusChip :state="monitor.state" />
       <v-spacer />
-      <v-btn color="primary" :loading="checking" prepend-icon="mdi-radar" @click="doCheck">立即检查</v-btn>
-      <v-btn v-if="canAck" color="warning" :loading="acking" prepend-icon="mdi-check" @click="doAck">确认更新</v-btn>
-      <v-btn variant="text" :to="`/monitors/${id}/edit`" prepend-icon="mdi-pencil">编辑</v-btn>
-      <v-btn variant="text" color="error" prepend-icon="mdi-delete" @click="doDelete">删除</v-btn>
+      <v-btn color="primary" :loading="checking" prepend-icon="mdi-radar" @click="doCheck">{{ t('monitors.checkNow') }}</v-btn>
+      <v-btn v-if="canAck" color="warning" :loading="acking" prepend-icon="mdi-check" @click="doAck">{{ t('monitors.detail.ack') }}</v-btn>
+      <v-btn variant="text" :to="`/monitors/${id}/edit`" prepend-icon="mdi-pencil">{{ t('common.edit') }}</v-btn>
+      <v-btn variant="text" color="error" prepend-icon="mdi-delete" @click="doDelete">{{ t('common.delete') }}</v-btn>
     </div>
 
     <v-row>
       <v-col cols="12" md="8">
         <v-card class="pa-6 mb-4">
-          <div class="text-subtitle-1 font-weight-medium mb-4">配置</div>
+          <div class="text-subtitle-1 font-weight-medium mb-4">{{ t('monitors.detail.config') }}</div>
           <v-row dense>
-            <v-col cols="12" md="6"><b>源类型</b>：{{ monitor.source_type }}</v-col>
-            <v-col cols="12" md="6"><b>间隔</b>：{{ monitor.interval_sec }} 秒</v-col>
-            <v-col cols="12"><b>源参数</b>：<code class="text-caption">{{ sourceSummary }}</code></v-col>
+            <v-col cols="12" md="6"><b>{{ t('monitors.detail.sourceType') }}</b>：{{ monitor.source_type }}</v-col>
+            <v-col cols="12" md="6"><b>{{ t('monitors.detail.interval') }}</b>：{{ t('monitors.detail.intervalValue', { n: monitor.interval_sec }) }}</v-col>
+            <v-col cols="12"><b>{{ t('monitors.detail.sourceConfig') }}</b>：<code class="text-caption">{{ sourceSummary }}</code></v-col>
             <v-col v-if="monitor.tags?.length" cols="12">
-              <v-chip v-for="t in monitor.tags" :key="t" size="small" class="me-1" label>{{ t }}</v-chip>
+              <v-chip v-for="tag in monitor.tags" :key="tag" size="small" class="me-1" label>{{ tag }}</v-chip>
             </v-col>
-            <v-col v-if="monitor.note" cols="12"><b>备注</b>：{{ monitor.note }}</v-col>
+            <v-col v-if="monitor.note" cols="12"><b>{{ t('monitors.detail.note') }}</b>：{{ monitor.note }}</v-col>
           </v-row>
         </v-card>
 
         <v-card class="pa-6 mb-4">
-          <div class="text-subtitle-1 font-weight-medium mb-4">版本历史</div>
+          <div class="text-subtitle-1 font-weight-medium mb-4">{{ t('monitors.detail.versionHistory') }}</div>
           <v-table v-if="changes.length" density="comfortable">
             <thead>
-              <tr><th>变更</th><th>发现时间</th><th>状态</th></tr>
+              <tr>
+                <th>{{ t('monitors.detail.change') }}</th>
+                <th>{{ t('monitors.detail.detectedAt') }}</th>
+                <th>{{ t('common.status') }}</th>
+              </tr>
             </thead>
             <tbody>
               <tr v-for="c in changes" :key="c.id">
                 <td><VersionDiff :old-version="c.old_version" :new-version="c.new_version" /></td>
                 <td><RelativeTime :time="c.detected_at" /></td>
                 <td>
-                  <v-chip v-if="c.acknowledged_at" size="small" variant="tonal">已确认</v-chip>
-                  <v-chip v-else size="small" color="warning" variant="tonal">待确认</v-chip>
+                  <v-chip v-if="c.acknowledged_at" size="small" variant="tonal">{{ t('monitors.detail.acknowledged') }}</v-chip>
+                  <v-chip v-else size="small" color="warning" variant="tonal">{{ t('monitors.detail.pendingAck') }}</v-chip>
                 </td>
               </tr>
             </tbody>
           </v-table>
-          <div v-else class="text-medium-emphasis">暂无版本变更</div>
+          <div v-else class="text-medium-emphasis">{{ t('monitors.detail.noChanges') }}</div>
         </v-card>
 
         <v-card class="pa-6">
-          <div class="text-subtitle-1 font-weight-medium mb-4">最近检查</div>
+          <div class="text-subtitle-1 font-weight-medium mb-4">{{ t('monitors.detail.recentChecks') }}</div>
           <v-table v-if="history.length" density="comfortable">
             <thead>
-              <tr><th>时间</th><th>结果</th><th>版本</th><th>耗时</th><th>错误</th></tr>
+              <tr>
+                <th>{{ t('monitors.detail.time') }}</th>
+                <th>{{ t('monitors.detail.result') }}</th>
+                <th>{{ t('monitors.detail.version') }}</th>
+                <th>{{ t('monitors.detail.duration') }}</th>
+                <th>{{ t('monitors.detail.error') }}</th>
+              </tr>
             </thead>
             <tbody>
               <tr v-for="h in history" :key="h.id">
@@ -173,7 +187,7 @@ async function doDelete() {
               </tr>
             </tbody>
           </v-table>
-          <div v-else class="text-medium-emphasis">还没有检查记录，点「立即检查」试试</div>
+          <div v-else class="text-medium-emphasis">{{ t('monitors.detail.noChecks') }}</div>
         </v-card>
       </v-col>
 
@@ -183,42 +197,42 @@ async function doDelete() {
             <StatusChip :state="monitor.state" />
           </div>
           <div class="d-flex justify-space-between py-1">
-            <span class="text-medium-emphasis">当前版本</span>
+            <span class="text-medium-emphasis">{{ t('monitors.detail.currentVersion') }}</span>
             <code>{{ monitor.current_version || '—' }}</code>
           </div>
           <div class="d-flex justify-space-between py-1">
-            <span class="text-medium-emphasis">最新版本</span>
+            <span class="text-medium-emphasis">{{ t('monitors.detail.latestVersion') }}</span>
             <VersionDiff :old-version="monitor.current_version" :new-version="monitor.latest_version" />
           </div>
           <div class="d-flex justify-space-between py-1">
-            <span class="text-medium-emphasis">上次检查</span>
+            <span class="text-medium-emphasis">{{ t('monitors.detail.lastChecked') }}</span>
             <span><RelativeTime :time="monitor.last_checked_at" /></span>
           </div>
           <div v-if="monitor.reference_monitor_id" class="mt-4 pt-4 border-t">
-            <div class="text-subtitle-2 font-weight-medium mb-2">版本对比</div>
+            <div class="text-subtitle-2 font-weight-medium mb-2">{{ t('monitors.detail.compareTitle') }}</div>
             <div class="d-flex justify-space-between align-center py-1">
-              <span class="text-medium-emphasis">对比状态</span>
-              <v-chip v-if="monitor.compare_state === 'lagging'" size="small" color="error" variant="flat" label>落后</v-chip>
-              <v-chip v-else-if="monitor.compare_state === 'in_sync'" size="small" color="success" variant="tonal" label>一致</v-chip>
-              <v-chip v-else-if="monitor.compare_state === 'ahead'" size="small" color="purple" variant="tonal" label>领先</v-chip>
-              <v-chip v-else size="small" variant="text" label>待对比</v-chip>
+              <span class="text-medium-emphasis">{{ t('monitors.detail.compareState') }}</span>
+              <v-chip v-if="monitor.compare_state === 'lagging'" size="small" color="error" variant="flat" label>{{ t('compare.lagging') }}</v-chip>
+              <v-chip v-else-if="monitor.compare_state === 'in_sync'" size="small" color="success" variant="tonal" label>{{ t('compare.in_sync') }}</v-chip>
+              <v-chip v-else-if="monitor.compare_state === 'ahead'" size="small" color="purple" variant="tonal" label>{{ t('compare.ahead') }}</v-chip>
+              <v-chip v-else size="small" variant="text" label>{{ t('compare.pending') }}</v-chip>
             </div>
             <div class="d-flex justify-space-between py-1">
-              <span class="text-medium-emphasis">参照监控</span>
+              <span class="text-medium-emphasis">{{ t('monitors.detail.referenceMonitor') }}</span>
               <router-link :to="`/monitors/${monitor.reference_monitor_id}`" class="text-decoration-none">
                 {{ refDisplayName }}
               </router-link>
             </div>
             <div class="d-flex justify-space-between py-1">
-              <span class="text-medium-emphasis">本地版本</span>
+              <span class="text-medium-emphasis">{{ t('monitors.detail.localVersion') }}</span>
               <code>{{ monitor.current_version || '—' }}</code>
             </div>
             <div class="d-flex justify-space-between py-1">
-              <span class="text-medium-emphasis">参照版本</span>
+              <span class="text-medium-emphasis">{{ t('monitors.detail.refVersion') }}</span>
               <code>{{ monitor.compare_ref_version || '—' }}</code>
             </div>
             <div v-if="monitor.compare_since" class="d-flex justify-space-between py-1">
-              <span class="text-medium-emphasis">状态更新于</span>
+              <span class="text-medium-emphasis">{{ t('monitors.detail.statusSince') }}</span>
               <span><RelativeTime :time="monitor.compare_since" /></span>
             </div>
           </div>

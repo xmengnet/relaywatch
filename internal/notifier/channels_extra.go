@@ -3,6 +3,7 @@ package notifier
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/smtp"
 	"strings"
@@ -240,8 +241,8 @@ func (n *WecomNotifier) Meta() Meta {
 }
 
 type wecomPayload struct {
-	MsgType string      `json:"msgtype"`
-	Text    wecomText   `json:"text"`
+	MsgType string    `json:"msgtype"`
+	Text    wecomText `json:"text"`
 }
 
 type wecomText struct {
@@ -294,8 +295,8 @@ func (n *DingTalkNotifier) Meta() Meta {
 }
 
 type dingPayload struct {
-	MsgType string    `json:"msgtype"`
-	Text    dingText  `json:"text"`
+	MsgType string   `json:"msgtype"`
+	Text    dingText `json:"text"`
 }
 
 type dingText struct {
@@ -464,18 +465,27 @@ func (n *SMTPNotifier) Meta() Meta {
 			{Key: "username", Label: "账号", Type: "string", Required: true},
 			{Key: "password", Label: "密码/授权码", Type: "secret", Required: true},
 			{Key: "from", Label: "发件人", Type: "string", Required: true},
-			{Key: "to", Label: "收件人", Type: "string", Required: true, Help: "多个用逗号分隔"},
+			{Key: "to", Label: "收件人", Type: "string", Help: "多个用逗号分隔；留空默认发送到渠道所有者的账号邮箱"},
 		},
 	}
 }
 
 func (n *SMTPNotifier) Validate(cfg map[string]any) error {
-	return required(cfg, "host", "port", "username", "password", "from", "to")
+	return required(cfg, "host", "port", "username", "password", "from")
 }
 
 func (n *SMTPNotifier) Send(ctx context.Context, cfg map[string]any, msg *Message) error {
 	from := cfgString(cfg, "from")
-	recipients := strings.Split(cfgString(cfg, "to"), ",")
+	to := cfgString(cfg, "to")
+	if to == "" {
+		// 调用方（worker/测试发送）应已按渠道所有者回填 owner_email；都没配置才算错误
+		if owner := cfgString(cfg, "owner_email"); owner != "" {
+			to = owner
+		} else {
+			return &PermanentError{Err: errors.New("email_smtp: 收件人为空且渠道所有者未设置邮箱")}
+		}
+	}
+	recipients := strings.Split(to, ",")
 	for i := range recipients {
 		recipients[i] = strings.TrimSpace(recipients[i])
 	}

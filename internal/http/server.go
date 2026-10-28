@@ -20,17 +20,18 @@ import (
 
 // Server HTTP 服务。
 type Server struct {
-	Auth      *auth.Service
-	OIDC      *auth.OIDCService
-	Store     store.Store
-	WebDist   fs.FS // 前端构建产物，可为 nil（纯 API 模式）
-	Checker   *check.Checker
-	Registry  *source.Registry
-	Notifiers *notifier.Registry
-	Evaluator *compare.Evaluator
-	Broker    *EventBroker
-	TestSender    func(ctx context.Context, ch *store.Channel) error
-	ResendOne     func(ctx context.Context, d *store.Delivery) error
+	Auth       *auth.Service
+	OIDC       *auth.OIDCService
+	Store      store.Store
+	WebDist    fs.FS // 前端构建产物，可为 nil（纯 API 模式）
+	Checker    *check.Checker
+	Registry   *source.Registry
+	Notifiers  *notifier.Registry
+	Evaluator  *compare.Evaluator
+	Broker     *EventBroker
+	TestSender func(ctx context.Context, ch *store.Channel) error
+	ResendOne  func(ctx context.Context, d *store.Delivery) error
+	SecretBox  store.SecretBox // 全局邮件密码等 settings 敏感字段加密（可为 nil）
 }
 
 // Handler 构建完整路由。
@@ -64,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/auth/login", authH.login)
 			r.Post("/auth/setup", authH.setup)
 			r.Post("/auth/register", authH.register)
+			r.Post("/auth/register/send-code", authH.registerSendCode)
 			if s.OIDC != nil {
 				r.Get("/auth/providers", (&OIDCHandler{Svc: s.OIDC, St: s.Store}).list)
 			}
@@ -86,8 +88,22 @@ func (s *Server) Handler() http.Handler {
 				userH.routes(r)
 			})
 
-				monH := &MonitorHandler{St: s.Store, Registry: s.Registry, Evaluator: s.Evaluator}
-				monH.routes(r)
+			// 「网站管理」：源站点默认值与 API 镜像（仅 admin）
+			siteH := &SiteConfigHandler{St: s.Store}
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireAdmin)
+				siteH.routes(r)
+			})
+
+			// 全局邮件配置（仅 admin）
+			mailH := &MailConfigHandler{St: s.Store, Box: s.SecretBox}
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireAdmin)
+				mailH.routes(r)
+			})
+
+			monH := &MonitorHandler{St: s.Store, Registry: s.Registry, Evaluator: s.Evaluator}
+			monH.routes(r)
 
 			checkH := &CheckHandler{St: s.Store, Checker: s.Checker, Registry: s.Registry}
 			checkH.routes(r)
@@ -113,13 +129,13 @@ func (s *Server) Handler() http.Handler {
 			tokH := &TokenHandler{Svc: s.Auth, St: s.Store}
 			tokH.routes(r)
 
-				r.Get("/stats", func(w http.ResponseWriter, req *http.Request) {
-					s.statsHandler(w, req)
-				})
+			r.Get("/stats", func(w http.ResponseWriter, req *http.Request) {
+				s.statsHandler(w, req)
+			})
 
-				if s.Broker != nil {
-					r.Get("/events", s.Broker.ServeHTTP)
-				}
+			if s.Broker != nil {
+				r.Get("/events", s.Broker.ServeHTTP)
+			}
 		})
 	})
 
@@ -186,12 +202,12 @@ func (s *Server) statsHandler(w http.ResponseWriter, r *http.Request) {
 			stats["missing"] = n
 		case store.StateUnknown:
 			stats["unknown"] = n
-			case store.StateUpToDate:
-				stats["ok"] = n
-			}
+		case store.StateUpToDate:
+			stats["ok"] = n
 		}
-		if _, lagging, err := s.Store.ListMonitors(ctx, store.MonitorFilter{CompareState: "lagging", PerPage: 1}); err == nil {
-			stats["lagging"] = lagging
-		}
-		writeJSON(w, http.StatusOK, stats)
+	}
+	if _, lagging, err := s.Store.ListMonitors(ctx, store.MonitorFilter{CompareState: "lagging", PerPage: 1}); err == nil {
+		stats["lagging"] = lagging
+	}
+	writeJSON(w, http.StatusOK, stats)
 }

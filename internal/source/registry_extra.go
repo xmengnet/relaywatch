@@ -20,7 +20,7 @@ func (s *GitLabReleaseSource) Meta() Meta {
 		Label: "GitLab Release",
 		Icon:  "mdi-gitlab",
 		Fields: []FieldSpec{
-			{Key: "host", Label: "GitLab 地址", Type: "string", Required: true, Placeholder: "https://gitlab.com"},
+			{Key: "host", Label: "GitLab 地址", Type: "string", Placeholder: "https://gitlab.com", Help: "留空用「网站管理」里的默认站点"},
 			{Key: "project", Label: "项目", Type: "string", Required: true, Placeholder: "group/project 或数字 ID"},
 			{Key: "token", Label: "访问令牌", Type: "secret", Help: "私有项目必填"},
 		},
@@ -28,6 +28,10 @@ func (s *GitLabReleaseSource) Meta() Meta {
 }
 
 func (s *GitLabReleaseSource) Validate(cfg map[string]any) error {
+	// host 可留空：取「网站管理」的站点默认值（ApplyHostDefaults 运行时回填）
+	if v, _ := cfg["host"].(string); strings.TrimSpace(v) == "" && HostDefaultFor("gitlab_release") != "" {
+		return required(cfg, "project")
+	}
 	return required(cfg, "host", "project")
 }
 
@@ -73,7 +77,7 @@ func (s *GiteaReleaseSource) Meta() Meta {
 		Label: "Gitea / Forgejo",
 		Icon:  "mdi-source-branch",
 		Fields: []FieldSpec{
-			{Key: "host", Label: "站点地址", Type: "string", Required: true, Placeholder: "https://gitea.example.com"},
+			{Key: "host", Label: "站点地址", Type: "string", Placeholder: "https://gitea.example.com", Help: "留空用「网站管理」里的默认站点"},
 			{Key: "repo", Label: "仓库", Type: "string", Required: true, Placeholder: "owner/name"},
 			{Key: "token", Label: "访问令牌", Type: "secret"},
 		},
@@ -81,13 +85,17 @@ func (s *GiteaReleaseSource) Meta() Meta {
 }
 
 func (s *GiteaReleaseSource) Validate(cfg map[string]any) error {
+	// host 可留空：取「网站管理」的站点默认值（ApplyHostDefaults 运行时回填）
+	if v, _ := cfg["host"].(string); strings.TrimSpace(v) == "" && HostDefaultFor("gitea_release") != "" {
+		return required(cfg, "repo")
+	}
 	return required(cfg, "host", "repo")
 }
 
 type giteaRelease struct {
-	TagName   string `json:"tag_name"`
-	HTMLURL   string `json:"html_url"`
-	Prerelease bool  `json:"prerelease"`
+	TagName    string `json:"tag_name"`
+	HTMLURL    string `json:"html_url"`
+	Prerelease bool   `json:"prerelease"`
 }
 
 func (s *GiteaReleaseSource) Fetch(ctx context.Context, cfg map[string]any) (*Result, error) {
@@ -129,8 +137,8 @@ func (s *PyPISource) Validate(cfg map[string]any) error {
 
 type pypiJSON struct {
 	Info struct {
-		Version string `json:"version"`
-		Home    string `json:"home_page"`
+		Version    string `json:"version"`
+		Home       string `json:"home_page"`
 		ProjectURL string `json:"project_url"`
 	} `json:"info"`
 	Releases map[string][]struct{} `json:"releases"`

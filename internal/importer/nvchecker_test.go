@@ -346,8 +346,3 @@ to_pattern = '\1.\2.\3'
 		t.Errorf("expected 0 warnings, got: %v", res.Warnings)
 	}
 }
-
-
-
-
-

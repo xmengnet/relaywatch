@@ -28,16 +28,16 @@ func TestStoreMonitorPatterns(t *testing.T) {
 	}
 
 	m := &Monitor{
-		OwnerID:             admin.ID,
-		Name:                "test-monitor",
-		SourceType:          "github_release",
-		SourceConfig:        `{"repo":"owner/repo"}`,
-		VersionPrefix:       "v",
-		FromPattern:         `(\d{4})(\d{2})(\d{2})`,
-		ToPattern:           `\1.\2.\3`,
-		IntervalSec:         300,
-		Enabled:             true,
-		State:               StateUnknown,
+		OwnerID:       admin.ID,
+		Name:          "test-monitor",
+		SourceType:    "github_release",
+		SourceConfig:  `{"repo":"owner/repo"}`,
+		VersionPrefix: "v",
+		FromPattern:   `(\d{4})(\d{2})(\d{2})`,
+		ToPattern:     `\1.\2.\3`,
+		IntervalSec:   300,
+		Enabled:       true,
+		State:         StateUnknown,
 	}
 
 	if err := st.CreateMonitor(ctx, m); err != nil {
@@ -124,4 +124,3 @@ func TestStoreMonitorPatterns(t *testing.T) {
 		t.Errorf("expected reference cleared, got: %+v", clearedF)
 	}
 }
-
