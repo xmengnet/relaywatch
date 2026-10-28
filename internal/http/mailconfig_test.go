@@ -1,12 +1,15 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"relaywatch/internal/crypto"
 	"relaywatch/internal/notifier"
 )
 
@@ -75,6 +78,54 @@ func TestMailConfigAuthAndCRUD(t *testing.T) {
 	}
 }
 
+// 配置了 SecretBox 时，SMTP 密码落库为密文；发系统邮件的 handler 必须能解密。
+func TestMailConfigEncryptedPasswordRoundTrip(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	box, err := crypto.NewBox(key, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := newMultiUserEnvWithBox(t, box)
+	env.mustUser(t, "admin-enc", "admin", "TestPassw0rd!")
+	cookie, csrf := env.loginAs(t, "admin-enc", "TestPassw0rd!")
+
+	rec := env.do(t, "PUT", "/api/v1/mail-config", cookie, csrf, map[string]any{
+		"host": "smtp.example.com", "port": "587", "username": "u",
+		"password": "smtp-secret", "from": "rw@example.com", "encryption": "starttls",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT mail-config = %d %s", rec.Code, rec.Body.String())
+	}
+
+	raw, err := env.st.GetSetting(context.Background(), settingMailConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(raw, "enc:") {
+		t.Fatalf("password should be stored encrypted, got %s", raw)
+	}
+
+	// 带 Box 的 handler（生产路径）能还原明文
+	h := &MailConfigHandler{St: env.st, Box: box}
+	_, pw, err := h.load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pw != "smtp-secret" {
+		t.Fatalf("decrypted password = %q, want smtp-secret", pw)
+	}
+
+	// 不带 Box 时只能拿到密文——这正是 SendSystemMail 之前漏传 Box 的故障点
+	h2 := &MailConfigHandler{St: env.st}
+	_, pw2, err := h2.load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pw2 == "smtp-secret" {
+		t.Fatal("handler without SecretBox should not return plaintext")
+	}
+}
+
 // ---------- 注册邮箱验证码 ----------
 
 func TestRegisterEmailCodeFlow(t *testing.T) {
@@ -104,8 +155,8 @@ func TestRegisterEmailCodeFlow(t *testing.T) {
 		t.Fatalf("mail config: %d", rec.Code)
 	}
 
-	// 生成验证码（直接走内部函数，模拟邮件已送达）
-	code, err := GenerateRegCode(context.Background(), env.st, "new@example.com")
+	// 生成验证码（直接走内部函数，模拟邮件已送达；此处仅制造"已有待验码"状态）
+	_, err := GenerateRegCode(context.Background(), env.st, "new@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +176,7 @@ func TestRegisterEmailCodeFlow(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("mismatched email = %d, want 400", rec.Code)
 	}
-	code, _ = GenerateRegCode(context.Background(), env.st, "new@example.com") // 上一步未消费，重新生成防过期混乱
+	code, _ := GenerateRegCode(context.Background(), env.st, "new@example.com") // 上一步未消费，重新生成防过期混乱
 
 	// 正确码 → 注册成功
 	rec = env.do(t, "POST", "/api/v1/auth/register", "", "", map[string]any{
@@ -147,15 +198,10 @@ func TestRegisterEmailCodeFlow(t *testing.T) {
 func TestVerifyRegCodeExpiry(t *testing.T) {
 	env := newMultiUserEnv(t)
 	ctx := context.Background()
-	code, err := GenerateRegCode(ctx, env.st, "a@x.io")
-	if err != nil {
+	if err := env.st.PutRegistrationCode(ctx, "a@x.io", "123456", time.Now().Add(-time.Minute), time.Now().Add(-time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	// 手动把过期时间改到过去
-	raw, _ := env.st.GetSetting(ctx, "registration.email_code")
-	future := strings.Replace(raw, time.Now().UTC().Format("2006"), "2000", 1)
-	_ = env.st.SetSetting(ctx, "registration.email_code", future)
-	if err := VerifyRegCode(ctx, env.st, "a@x.io", code); err == nil || !strings.Contains(err.Error(), "过期") {
+	if err := VerifyRegCode(ctx, env.st, "a@x.io", "123456"); err == nil || !strings.Contains(err.Error(), "过期") {
 		t.Errorf("expired code should fail with 过期, got %v", err)
 	}
 }

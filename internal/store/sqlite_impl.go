@@ -116,6 +116,8 @@ func (s *sqliteStore) ListUsers(ctx context.Context, f UserFilter) ([]*User, int
 	}
 	if f.PerPage <= 0 {
 		f.PerPage = 25
+	} else if f.PerPage > 100 {
+		f.PerPage = 100
 	}
 	if f.Page <= 0 {
 		f.Page = 1
@@ -533,6 +535,8 @@ func (s *sqliteStore) ListMonitors(ctx context.Context, f MonitorFilter) ([]*Mon
 	}
 	if f.PerPage <= 0 {
 		f.PerPage = 25
+	} else if f.PerPage > 100 {
+		f.PerPage = 100
 	}
 	if f.Page <= 0 {
 		f.Page = 1
@@ -580,6 +584,52 @@ func (s *sqliteStore) ListMonitors(ctx context.Context, f MonitorFilter) ([]*Mon
 		}
 	}
 	return out, total, nil
+}
+
+// CountMonitorStates 一次 GROUP BY 完成仪表盘计数，避免按状态重复查询。
+func (s *sqliteStore) CountMonitorStates(ctx context.Context, ownerID int64) (MonitorCounts, error) {
+	where := "1=1"
+	var args []any
+	if ownerID > 0 {
+		where = "owner_id = ?"
+		args = append(args, ownerID)
+	}
+	rows, err := s.db.query(ctx,
+		`SELECT state, compare_state, COUNT(*) FROM monitors WHERE `+where+` GROUP BY state, compare_state`, args...)
+	if err != nil {
+		return MonitorCounts{}, err
+	}
+	var counts MonitorCounts
+	for rows.Next() {
+		var state, compareState sql.NullString
+		var n int
+		if err := rows.Scan(&state, &compareState, &n); err != nil {
+			rows.Close()
+			return MonitorCounts{}, err
+		}
+		counts.Total += n
+		switch MonitorState(state.String) {
+		case StateUpToDate:
+			counts.UpToDate += n
+		case StateHasUpdate:
+			counts.HasUpdate += n
+		case StateError:
+			counts.Error += n
+		case StateMissing:
+			counts.Missing += n
+		case StateUnknown:
+			counts.Unknown += n
+		}
+		if compareState.String == "lagging" {
+			counts.Lagging += n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return MonitorCounts{}, err
+	}
+	rows.Close()
+	return counts, nil
 }
 
 func (s *sqliteStore) UpdateMonitor(ctx context.Context, m *Monitor) error {

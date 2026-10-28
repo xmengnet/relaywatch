@@ -492,8 +492,8 @@ const templatePresets = useTemplatePresets()
           <v-alert type="info" variant="tonal" density="compact">
             <div class="text-body-2">
               {{ t('help.channels.syntax1') }}<code class="font-mono">if / else / eq / range</code>；
-              {{ t('help.channels.syntax2') }}<code class="font-mono">upper</code>{{ t('help.channels.syntax3') }}
-              <code class="font-mono">Tags</code>{{ t('help.channels.syntax4') }}<code class="font-mono">[tag1 tag2]</code>{{ t('help.channels.syntax5') }}
+              {{ t('help.channels.syntax2') }}<code class="font-mono">upper</code>{{ t('help.channels.syntax3') }}<code class="font-mono">joinTags</code>{{ t('help.channels.syntax4') }}<code class="font-mono">compareStateText</code>{{ t('help.channels.syntax5') }}
+              <code class="font-mono">Tags</code>{{ t('help.channels.syntax6') }}<code class="font-mono">[tag1 tag2]</code>{{ t('help.channels.syntax7') }}
               <code class="font-mono">{{ tagsRangeExample }}</code>。
             </div>
           </v-alert>

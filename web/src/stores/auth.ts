@@ -9,12 +9,14 @@ export const useAuthStore = defineStore('auth', () => {
   const loaded = ref(false)
   const setupRequired = ref(false)
   const registrationOpen = ref(false)
+  const registrationRequireEmail = ref(false)
 
   async function load() {
     const status = await authApi.authStatus()
     user.value = status.user
     setupRequired.value = status.setup_required
     registrationOpen.value = status.registration_open ?? false
+    registrationRequireEmail.value = status.registration_require_email ?? false
     loaded.value = true
     if (status.user && status.csrf_token) {
       // 已登录（含页面刷新后）：直接取回该会话的 CSRF token
@@ -67,5 +69,12 @@ export const useAuthStore = defineStore('auth', () => {
     return perms.includes(perm)
   }
 
-  return { user, loaded, setupRequired, registrationOpen, load, login, setup, register, logout, can }
+  // 写权限判定：admin/user 可增删改既有资源，viewer 只读。
+  // 对应后端 store.User.CanWrite；显式 permissions 只覆盖四个附加操作，不解除只读。
+  function canWrite(): boolean {
+    const u = user.value
+    return !!u && u.role !== 'viewer'
+  }
+
+  return { user, loaded, setupRequired, registrationOpen, registrationRequireEmail, load, login, setup, register, logout, can, canWrite }
 })

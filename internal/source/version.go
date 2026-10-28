@@ -25,12 +25,6 @@ func CompareVersions(a, b string) (int, error) {
 	return av.Compare(bv), nil
 }
 
-// Parseable 判断版本是否可解析为 semver。
-func Parseable(v string) bool {
-	_, err := semver.NewVersion(v)
-	return err == nil
-}
-
 // compareSegmented 分段比较：把版本按字母/数字段切开逐段比。
 // 覆盖 "0.1.9" vs "0.1.10"、"2024.01.15"、"1.0-2" 这类非严格 semver。
 func compareSegmented(a, b string) int {

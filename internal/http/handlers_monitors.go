@@ -73,8 +73,7 @@ func (h *MonitorHandler) list(w http.ResponseWriter, r *http.Request) {
 	} else {
 		f.OwnerID = scopeOwnerID(r)
 	}
-	f.Page, _ = strconv.Atoi(q.Get("page"))
-	f.PerPage, _ = strconv.Atoi(q.Get("per_page"))
+	f.Page, f.PerPage = pageParams(r)
 	items, total, err := h.St.ListMonitors(r.Context(), f)
 	if err != nil {
 		writeInternalError(w, err)
@@ -236,6 +235,9 @@ func (h *MonitorHandler) update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !requireWrite(w, r) {
+		return
+	}
 	id := m.ID
 	var p monitorPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
@@ -275,6 +277,9 @@ func (h *MonitorHandler) remove(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !requireWrite(w, r) {
+		return
+	}
 	id := m.ID
 	_ = h.St.ClearFollowerReferences(r.Context(), id)
 	if err := h.St.DeleteMonitor(r.Context(), id); err != nil {
@@ -285,6 +290,9 @@ func (h *MonitorHandler) remove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MonitorHandler) batch(w http.ResponseWriter, r *http.Request) {
+	if !requireWrite(w, r) {
+		return
+	}
 	var req struct {
 		Action string  `json:"action"`
 		IDs    []int64 `json:"ids"`

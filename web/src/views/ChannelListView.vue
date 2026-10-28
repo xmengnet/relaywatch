@@ -199,10 +199,11 @@ function insertVar(varCode: string) {
           </div>
           <div class="text-caption text-medium-emphasis mb-4">{{ t('channels.createdAt', { time: formatDateTime(c.created_at) }) }}</div>
           <div class="d-flex ga-2">
-            <v-btn size="small" :loading="testing === c.id" prepend-icon="mdi-send" @click="doTest(c)">{{ t('channels.test') }}</v-btn>
+            <!-- 写操作仅 admin/user 可见；viewer 只读（服务端同样拒绝） -->
+            <v-btn v-if="auth.canWrite()" size="small" :loading="testing === c.id" prepend-icon="mdi-send" @click="doTest(c)">{{ t('channels.test') }}</v-btn>
             <v-spacer />
-            <v-btn size="small" variant="text" prepend-icon="mdi-pencil" @click="openEdit(c)">{{ t('common.edit') }}</v-btn>
-            <v-btn size="small" variant="text" color="error" prepend-icon="mdi-delete" @click="doDelete(c)">{{ t('common.delete') }}</v-btn>
+            <v-btn v-if="auth.canWrite()" size="small" variant="text" prepend-icon="mdi-pencil" @click="openEdit(c)">{{ t('common.edit') }}</v-btn>
+            <v-btn v-if="auth.canWrite()" size="small" variant="text" color="error" prepend-icon="mdi-delete" @click="doDelete(c)">{{ t('common.delete') }}</v-btn>
           </div>
         </v-card>
       </v-col>

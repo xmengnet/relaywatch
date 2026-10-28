@@ -63,32 +63,46 @@ const presetKeys: TemplatePresetKey[] = ['standard', 'compact', 'markdown', 'com
 
 const presetTemplates: Record<'zh-Hans' | 'en', Record<TemplatePresetKey, string>> = {
   'zh-Hans': {
-    standard: `{{ .Monitor.Name }}（{{ .Monitor.SourceType }}）发现新版本：
-{{ if .Change.OldVersion }}{{ .Change.OldVersion }} → {{ end }}{{ .Change.NewVersion }}
-{{ if .URL }}{{ .URL }}{{ end }}
-发现时间：{{ .Change.DetectedAt.Format "2006-01-02 15:04:05" }}`,
+    standard: `🚀 {{ .Monitor.Name }}（{{ .Monitor.SourceType }}）发现新版本
+{{ if .Change.OldVersion }}版本：{{ .Change.OldVersion }} → {{ .Change.NewVersion }}{{ else }}版本：{{ .Change.NewVersion }}（新监控基线）{{ end }}
+{{ if .Monitor.Tags }}标签：{{ .Monitor.Tags | joinTags }}{{ end }}
+{{ if .URL }}链接：{{ .URL }}{{ end }}
+时间：{{ .Change.DetectedAt.Format "2006-01-02 15:04:05" }}`,
     compact: `【{{ .Monitor.Name }}】{{ if .Change.OldVersion }}{{ .Change.OldVersion }} ➔ {{ end }}{{ .Change.NewVersion }} {{ if .URL }}({{ .URL }}){{ end }}`,
     markdown: `### 🚀 {{ .Monitor.Name }} 发布新版本
 - **最新版本**：\`{{ .Change.NewVersion }}\`
 {{ if .Change.OldVersion }}- **上个版本**：\`{{ .Change.OldVersion }}\`{{ end }}
+{{ if .Monitor.Tags }}- **标签**：\`{{ .Monitor.Tags | joinTags }}\`{{ end }}
 {{ if .URL }}- **发布页面**：[{{ .Monitor.Name }}]({{ .URL }}){{ end }}
 > 监测时间：{{ .Change.DetectedAt.Format "2006-01-02 15:04:05" }}`,
-    compare: `{{ if eq .Compare.Event "caught_up" }}🎉 {{ .Monitor.Name }}（{{ .Compare.FollowerVersion }}）已成功追平上游 {{ .Compare.RefMonitorName }}！{{ else }}⚠️ {{ .Monitor.Name }}（{{ .Compare.FollowerVersion }}）当前落后于上游 {{ .Compare.RefMonitorName }}（{{ .Compare.RefVersion }}）{{ end }}
-{{ if .URL }}参考链接：{{ .URL }}{{ end }}`,
+    compare: `{{ if eq .Compare.Event "caught_up" }}✅ {{ .Monitor.Name }} 已追平上游 {{ .Compare.RefMonitorName }}{{ else if eq .Compare.Event "gap_grew" }}📉 {{ .Monitor.Name }} 落后幅度扩大（上游又发布了新版本）{{ else }}⚠️ {{ .Monitor.Name }} 落后于上游 {{ .Compare.RefMonitorName }}{{ end }}
+本包：{{ .Monitor.Name }}（{{ .Monitor.SourceType }}）{{ .Compare.FollowerVersion }}
+上游：{{ .Compare.RefMonitorName }} {{ .Compare.RefVersion }}
+{{ if ne .Compare.RefVersion .Compare.FollowerVersion }}差距：{{ .Compare.FollowerVersion }} ⇐ {{ .Compare.RefVersion }}{{ else }}两侧版本一致{{ end }}
+{{ if .URL }}上游链接：{{ .URL }}{{ end }}
+状态：{{ .Compare.State | compareStateText }}
+时间：{{ .Change.DetectedAt.Format "2006-01-02 15:04:05" }}`,
   },
   en: {
-    standard: `{{ .Monitor.Name }} ({{ .Monitor.SourceType }}) has a new version:
-{{ if .Change.OldVersion }}{{ .Change.OldVersion }} → {{ end }}{{ .Change.NewVersion }}
-{{ if .URL }}{{ .URL }}{{ end }}
+    standard: `🚀 {{ .Monitor.Name }} ({{ .Monitor.SourceType }}) has a new version
+{{ if .Change.OldVersion }}Version: {{ .Change.OldVersion }} → {{ .Change.NewVersion }}{{ else }}Version: {{ .Change.NewVersion }} (new baseline){{ end }}
+{{ if .Monitor.Tags }}Tags: {{ .Monitor.Tags | joinTags }}{{ end }}
+{{ if .URL }}Link: {{ .URL }}{{ end }}
 Detected: {{ .Change.DetectedAt.Format "2006-01-02 15:04:05" }}`,
     compact: `[{{ .Monitor.Name }}] {{ if .Change.OldVersion }}{{ .Change.OldVersion }} ➔ {{ end }}{{ .Change.NewVersion }} {{ if .URL }}({{ .URL }}){{ end }}`,
     markdown: `### 🚀 {{ .Monitor.Name }} released a new version
 - **Latest version**: \`{{ .Change.NewVersion }}\`
 {{ if .Change.OldVersion }}- **Previous version**: \`{{ .Change.OldVersion }}\`{{ end }}
+{{ if .Monitor.Tags }}- **Tags**: \`{{ .Monitor.Tags | joinTags }}\`{{ end }}
 {{ if .URL }}- **Release page**: [{{ .Monitor.Name }}]({{ .URL }}){{ end }}
 > Detected: {{ .Change.DetectedAt.Format "2006-01-02 15:04:05" }}`,
-    compare: `{{ if eq .Compare.Event "caught_up" }}🎉 {{ .Monitor.Name }} ({{ .Compare.FollowerVersion }}) has caught up with upstream {{ .Compare.RefMonitorName }}!{{ else }}⚠️ {{ .Monitor.Name }} ({{ .Compare.FollowerVersion }}) is behind upstream {{ .Compare.RefMonitorName }} ({{ .Compare.RefVersion }}){{ end }}
-{{ if .URL }}Reference: {{ .URL }}{{ end }}`,
+    compare: `{{ if eq .Compare.Event "caught_up" }}✅ {{ .Monitor.Name }} has caught up with upstream {{ .Compare.RefMonitorName }}{{ else if eq .Compare.Event "gap_grew" }}📉 {{ .Monitor.Name }} gap widened (upstream released again){{ else }}⚠️ {{ .Monitor.Name }} is behind upstream {{ .Compare.RefMonitorName }}{{ end }}
+Package: {{ .Monitor.Name }} ({{ .Monitor.SourceType }}) {{ .Compare.FollowerVersion }}
+Upstream: {{ .Compare.RefMonitorName }} {{ .Compare.RefVersion }}
+{{ if ne .Compare.RefVersion .Compare.FollowerVersion }}Gap: {{ .Compare.FollowerVersion }} ⇐ {{ .Compare.RefVersion }}{{ else }}Versions match{{ end }}
+{{ if .URL }}Upstream link: {{ .URL }}{{ end }}
+State: {{ .Compare.State | compareStateText }}
+Detected: {{ .Change.DetectedAt.Format "2006-01-02 15:04:05" }}`,
   },
 }
 

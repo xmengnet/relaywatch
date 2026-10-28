@@ -92,17 +92,6 @@ func nullTime(t *time.Time) any {
 	return formatTime(*t)
 }
 
-func scanTime(s sql.NullString) (*time.Time, error) {
-	if !s.Valid || s.String == "" {
-		return nil, nil
-	}
-	t, err := time.Parse(time.RFC3339Nano, s.String)
-	if err != nil {
-		return nil, fmt.Errorf("parse time %q: %w", s.String, err)
-	}
-	return &t, nil
-}
-
 func nullString(s string) any {
 	if s == "" {
 		return nil

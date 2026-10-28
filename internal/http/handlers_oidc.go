@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -14,8 +15,9 @@ import (
 
 // OIDCHandler OIDC 登录路由 + Provider 管理。
 type OIDCHandler struct {
-	Svc *auth.OIDCService
-	St  store.Store
+	Svc           *auth.OIDCService
+	St            store.Store
+	SecureCookies bool // base_url 为 https 时强制 Secure Cookie
 }
 
 func (h *OIDCHandler) routesPublic(r chi.Router) {
@@ -65,10 +67,11 @@ func (h *OIDCHandler) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := h.Svc.SessionFor(r.Context(), u.ID, r.UserAgent(), clientIP(r))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("oidc session create failed", "provider", name, "err", err)
+		http.Redirect(w, r, "/login?error=oidc_failed", http.StatusFound)
 		return
 	}
-	secure := r.TLS != nil
+	secure := secureCookie(r, h.SecureCookies)
 	auth.SetSessionCookie(w, sess.ID, int(sess.ExpiresAt.Sub(sess.CreatedAt).Seconds()), secure)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -144,10 +147,7 @@ func (h *OIDCHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	secret, _ := p.ClientSecret, error(nil)
-	_ = secret
-	sec := string(p.ClientSecret)
-	sec = trimJSONString(sec)
+	sec := trimJSONString(string(p.ClientSecret))
 	if sec == "" {
 		writeError(w, http.StatusBadRequest, "client_secret 必填")
 		return

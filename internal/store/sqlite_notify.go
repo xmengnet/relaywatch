@@ -196,7 +196,7 @@ func (s *sqliteStore) DueDeliveries(ctx context.Context, now time.Time, limit in
 	return out, rows.Err()
 }
 
-func (s *sqliteStore) ListDeliveries(ctx context.Context, monitorID, channelID int64, status DeliveryStatus, page, perPage int) ([]*Delivery, int, error) {
+func (s *sqliteStore) ListDeliveries(ctx context.Context, monitorID, channelID int64, status DeliveryStatus, ownerID int64, page, perPage int) ([]*Delivery, int, error) {
 	where := "1=1"
 	var args []any
 	if monitorID > 0 {
@@ -210,6 +210,12 @@ func (s *sqliteStore) ListDeliveries(ctx context.Context, monitorID, channelID i
 	if status != "" {
 		where += " AND status = ?"
 		args = append(args, string(status))
+	}
+	// 归属过滤在 SQL 层完成：COUNT 与分页都基于过滤后的集合，
+	// 避免先取全局一页再在内存里删掉别人的记录导致分页错位。
+	if ownerID > 0 {
+		where += " AND monitor_id IN (SELECT id FROM monitors WHERE owner_id = ?)"
+		args = append(args, ownerID)
 	}
 	var total int
 	if err := s.db.queryRow(ctx, `SELECT COUNT(*) FROM deliveries WHERE `+where, args...).Scan(&total); err != nil {

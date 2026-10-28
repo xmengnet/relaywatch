@@ -185,13 +185,24 @@ func (n *FeishuNotifier) Meta() Meta {
 	}
 }
 
-type feishuPayload struct {
-	MsgType string        `json:"msg_type"`
-	Content feishuContent `json:"content"`
+// 飞书 post 富文本消息：渲染换行与 **粗体**（默认模板的标题行用粗体突出）。
+type feishuPostPayload struct {
+	MsgType string            `json:"msg_type"`
+	Content feishuPostContent `json:"content"`
 }
 
-type feishuContent struct {
+type feishuPostContent struct {
+	Post feishuPost `json:"post"`
+}
+
+type feishuPost struct {
+	ZhCN [][]feishuPostElement `json:"zh_cn"`
+}
+
+type feishuPostElement struct {
+	Tag  string `json:"tag"` // text
 	Text string `json:"text"`
+	Bold bool   `json:"bold,omitempty"`
 }
 
 func (n *FeishuNotifier) Validate(cfg map[string]any) error {
@@ -199,10 +210,7 @@ func (n *FeishuNotifier) Validate(cfg map[string]any) error {
 }
 
 func (n *FeishuNotifier) Send(ctx context.Context, cfg map[string]any, msg *Message) error {
-	body, _ := json.Marshal(feishuPayload{
-		MsgType: "text",
-		Content: feishuContent{Text: msg.Title + "\n" + msg.Body},
-	})
+	body, _ := json.Marshal(feishuRichtext(msg.Title, msg.Body))
 	status, resp, err := httpPost(ctx, cfgString(cfg, "webhook_url"), nil, body)
 	if err != nil {
 		return fmt.Errorf("feishu: %w", err)
@@ -220,6 +228,41 @@ func (n *FeishuNotifier) Send(ctx context.Context, cfg map[string]any, msg *Mess
 		return fmt.Errorf("feishu: %s", r.Msg)
 	}
 	return nil
+}
+
+// feishuRichtext 构造 post 消息：标题一行加粗，正文逐行展开，
+// 行内 **bold** 片段转为 bold 元素。
+func feishuRichtext(title, body string) feishuPostPayload {
+	rows := [][]feishuPostElement{{{Tag: "text", Text: title, Bold: true}}}
+	for _, line := range strings.Split(body, "\n") {
+		var row []feishuPostElement
+		rest := line
+		for {
+			before, after, found := strings.Cut(rest, "**")
+			if !found {
+				if before != "" {
+					row = append(row, feishuPostElement{Tag: "text", Text: before})
+				}
+				break
+			}
+			bold, rest2, ok := strings.Cut(after, "**")
+			if !ok {
+				// 未配对的 **，按普通文本处理
+				row = append(row, feishuPostElement{Tag: "text", Text: rest})
+				break
+			}
+			if before != "" {
+				row = append(row, feishuPostElement{Tag: "text", Text: before})
+			}
+			row = append(row, feishuPostElement{Tag: "text", Text: bold, Bold: true})
+			rest = rest2
+		}
+		if len(row) == 0 {
+			row = []feishuPostElement{{Tag: "text", Text: " "}} // 飞书空行需要占位元素
+		}
+		rows = append(rows, row)
+	}
+	return feishuPostPayload{MsgType: "post", Content: feishuPostContent{Post: feishuPost{ZhCN: rows}}}
 }
 
 // ---------- 企业微信 ----------
@@ -241,11 +284,16 @@ func (n *WecomNotifier) Meta() Meta {
 }
 
 type wecomPayload struct {
-	MsgType string    `json:"msgtype"`
-	Text    wecomText `json:"text"`
+	MsgType  string         `json:"msgtype"`
+	Text     *wecomText     `json:"text,omitempty"`
+	Markdown *wecomMarkdown `json:"markdown,omitempty"`
 }
 
 type wecomText struct {
+	Content string `json:"content"`
+}
+
+type wecomMarkdown struct {
 	Content string `json:"content"`
 }
 
@@ -254,10 +302,17 @@ func (n *WecomNotifier) Validate(cfg map[string]any) error {
 }
 
 func (n *WecomNotifier) Send(ctx context.Context, cfg map[string]any, msg *Message) error {
-	body, _ := json.Marshal(wecomPayload{
-		MsgType: "text",
-		Text:    wecomText{Content: msg.Title + "\n" + msg.Body},
-	})
+	// markdown 消息渲染粗体/换行；text 兜底（个别旧机器人不支持 markdown）
+	var payload wecomPayload
+	if msg.Markdown {
+		payload = wecomPayload{MsgType: "markdown", Markdown: &wecomMarkdown{
+			// 企微 markdown 的首行 # 标题不支持 emoji 前缀外的富文本，用粗体当标题
+			Content: "**" + msg.Title + "**\n" + msg.Body,
+		}}
+	} else {
+		payload = wecomPayload{MsgType: "text", Text: &wecomText{Content: msg.Title + "\n" + msg.Body}}
+	}
+	body, _ := json.Marshal(payload)
 	status, resp, err := httpPost(ctx, cfgString(cfg, "webhook_url"), nil, body)
 	if err != nil {
 		return fmt.Errorf("wecom: %w", err)
@@ -295,12 +350,18 @@ func (n *DingTalkNotifier) Meta() Meta {
 }
 
 type dingPayload struct {
-	MsgType string   `json:"msgtype"`
-	Text    dingText `json:"text"`
+	MsgType  string        `json:"msgtype"`
+	Text     *dingText     `json:"text,omitempty"`
+	Markdown *dingMarkdown `json:"markdown,omitempty"`
 }
 
 type dingText struct {
 	Content string `json:"content"`
+}
+
+type dingMarkdown struct {
+	Title string `json:"title"`
+	Text  string `json:"text"`
 }
 
 func (n *DingTalkNotifier) Validate(cfg map[string]any) error {
@@ -308,10 +369,18 @@ func (n *DingTalkNotifier) Validate(cfg map[string]any) error {
 }
 
 func (n *DingTalkNotifier) Send(ctx context.Context, cfg map[string]any, msg *Message) error {
-	body, _ := json.Marshal(dingPayload{
-		MsgType: "text",
-		Text:    dingText{Content: "RelayWatch\n" + msg.Title + "\n" + msg.Body},
-	})
+	// markdown 消息渲染粗体/换行/链接；text 兜底
+	var payload dingPayload
+	if msg.Markdown {
+		payload = dingPayload{MsgType: "markdown", Markdown: &dingMarkdown{
+			Title: msg.Title,
+			// 钉钉 markdown 正文不受 20000 字符限制（title 有），首行用 # 标题
+			Text: "### " + msg.Title + "\n" + msg.Body,
+		}}
+	} else {
+		payload = dingPayload{MsgType: "text", Text: &dingText{Content: "RelayWatch\n" + msg.Title + "\n" + msg.Body}}
+	}
+	body, _ := json.Marshal(payload)
 	status, resp, err := httpPost(ctx, cfgString(cfg, "webhook_url"), nil, body)
 	if err != nil {
 		return fmt.Errorf("dingtalk: %w", err)

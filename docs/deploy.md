@@ -82,6 +82,8 @@ location /api/v1/events {
 
 `server.base_url` 需设为外部可达地址（`https://relaywatch.example.com`），OIDC 回调依赖它。
 
+反向代理部署还需在 `config.yaml` 设置 `server.trust_proxy: true`，服务才会采信 `X-Real-IP` / `X-Forwarded-For` 作为客户端 IP（登录限流、审计日志依赖它）。直连部署保持 `false`，避免客户端伪造转发头绕过限流。
+
 ## Prometheus
 
 `/metrics` 输出文本格式指标（监控按状态计数、启用数、投递队列），无需认证——建议在反代层限制来源，或仅监听内网。

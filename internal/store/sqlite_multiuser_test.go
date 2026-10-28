@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -125,7 +126,7 @@ func TestMonitorOwnerFilter(t *testing.T) {
 	}
 
 	// bob 视角看不到 alice 的
-	items, total, _ = s.ListMonitors(ctx, MonitorFilter{OwnerID: bob.ID, PerPage: 100})
+	_, total, _ = s.ListMonitors(ctx, MonitorFilter{OwnerID: bob.ID, PerPage: 100})
 	if total != 1 {
 		t.Fatalf("bob view total=%d, want 1", total)
 	}
@@ -331,4 +332,115 @@ func TestSetMonitorOwner(t *testing.T) {
 	// 注：monitors.owner_id 无数据库级外键（SQLite 不允许 REFERENCES + 非 NULL 默认值的
 	// ADD COLUMN），归属完整性由应用层保证（创建强制当前用户、删除时事务内转移），
 	// 因此对不存在用户的 SetMonitorOwner 不再期望报错——不专门测试该路径。
+}
+
+// 投递列表的 owner 过滤必须在 SQL 层生效：COUNT 与分页都基于过滤后的集合。
+func TestDeliveryOwnerFilter(t *testing.T) {
+	s, ctx := newMultiUserStore(t)
+	alice := mustUser(t, s, ctx, "alice", "user", false)
+	bob := mustUser(t, s, ctx, "bob", "user", false)
+	ma := mustMonitor(t, s, ctx, "alice-mon", alice.ID)
+	mb := mustMonitor(t, s, ctx, "bob-mon", bob.ID)
+
+	ch := &Channel{Name: "c", Type: "webhook", Config: "{}", Enabled: true, OwnerID: &alice.ID}
+	if err := s.CreateChannel(ctx, ch); err != nil {
+		t.Fatal(err)
+	}
+	add := func(monitorID int64) {
+		t.Helper()
+		if err := s.AddDelivery(ctx, &Delivery{MonitorID: monitorID, ChannelID: ch.ID, Status: DeliveryPending}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		add(ma.ID)
+	}
+	add(mb.ID)
+
+	// alice 只看到自己的 3 条；total 也是 3，而不是全局 4
+	items, total, err := s.ListDeliveries(ctx, 0, 0, "", alice.ID, 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 || total != 3 {
+		t.Fatalf("alice deliveries = %d/%d, want 3/3", len(items), total)
+	}
+	for _, d := range items {
+		if d.MonitorID != ma.ID {
+			t.Fatalf("alice saw delivery for monitor %d", d.MonitorID)
+		}
+	}
+
+	// 分页基于过滤后的集合：第 2 页每页 2 条 → 1 条
+	items, total, err = s.ListDeliveries(ctx, 0, 0, "", alice.ID, 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || total != 3 {
+		t.Fatalf("alice page2 = %d/%d, want 1/3", len(items), total)
+	}
+
+	// admin（ownerID=0）看到全部 4 条
+	items, total, err = s.ListDeliveries(ctx, 0, 0, "", 0, 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 4 || total != 4 {
+		t.Fatalf("all deliveries = %d/%d, want 4/4", len(items), total)
+	}
+}
+
+// 仪表盘计数按 owner 过滤，且 lagging 与状态计数来自同一次分组查询。
+func TestCountMonitorStatesOwner(t *testing.T) {
+	s, ctx := newMultiUserStore(t)
+	alice := mustUser(t, s, ctx, "alice", "user", false)
+	bob := mustUser(t, s, ctx, "bob", "user", false)
+	ma1 := mustMonitor(t, s, ctx, "alice-1", alice.ID)
+	_ = mustMonitor(t, s, ctx, "alice-2", alice.ID)
+	mb := mustMonitor(t, s, ctx, "bob-1", bob.ID)
+
+	if _, err := s.db.exec(ctx, `UPDATE monitors SET state = 'has_update', compare_state = 'lagging' WHERE id = ?`, ma1.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.exec(ctx, `UPDATE monitors SET state = 'up_to_date' WHERE id = (SELECT id FROM monitors WHERE name = 'alice-2')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.exec(ctx, `UPDATE monitors SET state = 'error' WHERE id = ?`, mb.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.CountMonitorStates(ctx, alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 2 || got.HasUpdate != 1 || got.UpToDate != 1 || got.Lagging != 1 {
+		t.Fatalf("alice counts = %+v, want total=2 has_update=1 up_to_date=1 lagging=1", got)
+	}
+
+	all, err := s.CountMonitorStates(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Total != 3 || all.Error != 1 || all.Lagging != 1 {
+		t.Fatalf("all counts = %+v, want total=3 error=1 lagging=1", all)
+	}
+}
+
+// 列表 per_page 上限：即使调用方传超大值，也只返回 100 条。
+func TestListMonitorsPerPageCap(t *testing.T) {
+	s, ctx := newMultiUserStore(t)
+	admin := mustUser(t, s, ctx, "admin", "admin", false)
+	for i := 0; i < 150; i++ {
+		mustMonitor(t, s, ctx, "m-"+strconv.Itoa(i), admin.ID)
+	}
+	items, total, err := s.ListMonitors(ctx, MonitorFilter{OwnerID: admin.ID, PerPage: 100000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 150 {
+		t.Fatalf("total = %d, want 150", total)
+	}
+	if len(items) != 100 {
+		t.Fatalf("items = %d, want capped 100", len(items))
+	}
 }

@@ -14,24 +14,13 @@ import (
 )
 
 // Dispatcher 把检查结果转成投递任务。Checker 在每次成功检查后调用 OnChange。
+// 重试策略（次数/退避）由执行重试的 Worker 持有，见 notifications.retry 配置接线。
 type Dispatcher struct {
 	Store     store.Store
 	Notifiers *notifier.Registry
 
-	// Retry 配置
-	MaxAttempts int
-	BaseDelay   time.Duration
-	MaxDelay    time.Duration
-
 	// OnDelivery 事件钩子（SSE 用，可空）
 	OnDelivery func(status store.DeliveryStatus)
-}
-
-// 事件里带出的上下文：Checker 只需要告诉 Dispatcher「某监控出现/更新了变更」。
-type changeEvent struct {
-	Monitor *store.Monitor
-	Change  *store.VersionChange
-	Notify  bool // false = bump/rollback，不新建投递
 }
 
 // OnChange 由 Checker 调用（异步安全，内部串行化落库）。
@@ -197,40 +186,4 @@ func cfgFromJSON(raw string) (map[string]any, error) {
 		return nil, err
 	}
 	return cfg, nil
-}
-
-func (d *Dispatcher) maxAttempts() int {
-	if d.MaxAttempts > 0 {
-		return d.MaxAttempts
-	}
-	return 5
-}
-
-func (d *Dispatcher) baseDelay() time.Duration {
-	if d.BaseDelay > 0 {
-		return d.BaseDelay
-	}
-	return 2 * time.Second
-}
-
-func (d *Dispatcher) maxDelay() time.Duration {
-	if d.MaxDelay > 0 {
-		return d.MaxDelay
-	}
-	return 10 * time.Minute
-}
-
-// backoff 指数退避：base * 2^attempts，封顶 max。
-func (d *Dispatcher) backoff(attempts int) time.Duration {
-	delay := d.baseDelay()
-	for i := 1; i < attempts; i++ {
-		delay *= 2
-		if delay >= d.maxDelay() {
-			return d.maxDelay()
-		}
-	}
-	if delay > d.maxDelay() {
-		return d.maxDelay()
-	}
-	return delay
 }

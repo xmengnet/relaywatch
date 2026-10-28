@@ -32,22 +32,10 @@ func (h *DeliveryHandler) list(w http.ResponseWriter, r *http.Request) {
 	page := atoiOr(q.Get("page"), 1)
 	perPage := atoiOr(q.Get("per_page"), 25)
 
-	items, total, err := h.St.ListDeliveries(r.Context(), monitorID, channelID, status, page, perPage)
+	items, total, err := h.St.ListDeliveries(r.Context(), monitorID, channelID, status, scopeOwnerID(r), page, perPage)
 	if err != nil {
 		writeInternalError(w, err)
 		return
-	}
-	// 归属过滤：普通用户只看自己监控相关的投递（衍生表无 owner，经 monitor 间接判定）
-	u := authUser(r)
-	if !isAdmin(u) {
-		owned := make([]*store.Delivery, 0, len(items))
-		for _, d := range items {
-			if m, err := h.St.GetMonitor(r.Context(), d.MonitorID); err == nil && m.OwnerID == u.ID {
-				owned = append(owned, d)
-			}
-		}
-		items = owned
-		total = len(items)
 	}
 	// 补充监控/渠道名称，避免前端只能显示裸 ID
 	monitorNames := map[int64]string{}
@@ -112,6 +100,9 @@ func (h *DeliveryHandler) resend(w http.ResponseWriter, r *http.Request) {
 	// 重发作用于监控，按监控归属判定
 	if m, err := h.St.GetMonitor(r.Context(), d.MonitorID); err != nil || !canAccessMonitor(authUser(r), m) {
 		writeError(w, http.StatusNotFound, "投递记录不存在")
+		return
+	}
+	if !requireWrite(w, r) {
 		return
 	}
 	if d.Status == store.DeliveryPending || d.Status == store.DeliveryDeferred {

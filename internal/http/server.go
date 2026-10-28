@@ -32,6 +32,13 @@ type Server struct {
 	TestSender func(ctx context.Context, ch *store.Channel) error
 	ResendOne  func(ctx context.Context, d *store.Delivery) error
 	SecretBox  store.SecretBox // 全局邮件密码等 settings 敏感字段加密（可为 nil）
+	// TrustProxy 信任反向代理的 X-Forwarded-For / X-Real-IP；默认关闭，
+	// 避免客户端伪造转发头绕过按 IP 的登录限流与审计。
+	TrustProxy bool
+	// SecureCookies 强制会话 Cookie 带 Secure（base_url 为 https 时开启）。
+	SecureCookies bool
+	// LoginLimiter 登录失败与注册验证码发送的进程内限流（可为 nil，测试用）。
+	LoginLimiter *auth.AttemptLimiter
 }
 
 // Handler 构建完整路由。
@@ -39,7 +46,13 @@ func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.RealIP)
+	r.Use(limitBody)
+	if s.TrustProxy {
+		// 安全边界由配置兜住：仅当运维显式信任反代（trust_proxy: true）才启用，
+		// 使登录限流与审计拿到真实客户端 IP；直连部署保持关闭。
+		//lint:ignore SA1019 chi RealIP 已弃用（其默认无条件采信转发头），此处由 trust_proxy 显式开关兜住
+		r.Use(middleware.RealIP)
+	}
 	r.Use(securityHeaders)
 	r.Use(auth.Middleware(s.Auth))
 	r.Use(accessLogger) // 须在 auth 之后（记录用户）；panic 交由外层 Recoverer 打印堆栈
@@ -52,12 +65,13 @@ func (s *Server) Handler() http.Handler {
 
 	// OIDC 302 跳转（不经过 /api/v1，SPA 无法消费 302）
 	if s.OIDC != nil {
-		oidcH := &OIDCHandler{Svc: s.OIDC, St: s.Store}
+		oidcH := &OIDCHandler{Svc: s.OIDC, St: s.Store, SecureCookies: s.SecureCookies}
 		oidcH.routesPublic(r)
 	}
 
 	// API v1
-	authH := &AuthHandler{Svc: s.Auth, Store: s.Store}
+	mailH := &MailConfigHandler{St: s.Store, Box: s.SecretBox}
+	authH := &AuthHandler{Svc: s.Auth, Store: s.Store, Mail: mailH, Limiter: s.LoginLimiter, SecureCookies: s.SecureCookies}
 	r.Route("/api/v1", func(r chi.Router) {
 		// 匿名可达：状态查询（登录页/引导页用）、登录、首次引导、注册、OIDC provider 列表
 		r.Group(func(r chi.Router) {
@@ -96,7 +110,6 @@ func (s *Server) Handler() http.Handler {
 			})
 
 			// 全局邮件配置（仅 admin）
-			mailH := &MailConfigHandler{St: s.Store, Box: s.SecretBox}
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequireAdmin)
 				mailH.routes(r)
@@ -122,7 +135,7 @@ func (s *Server) Handler() http.Handler {
 
 			if s.OIDC != nil {
 				// providers 管理仅 admin；/auth/providers 公开端点在上面匿名组已注册
-				oidcH := &OIDCHandler{Svc: s.OIDC, St: s.Store}
+				oidcH := &OIDCHandler{Svc: s.OIDC, St: s.Store, SecureCookies: s.SecureCookies}
 				oidcH.routesAdmin(r)
 			}
 
@@ -164,6 +177,22 @@ func (s *Server) spaHandler() http.HandlerFunc {
 	}
 }
 
+// maxRequestBodyBytes 限制 JSON 请求体大小，防止超大 body 占满内存。
+const maxRequestBodyBytes = 8 << 20
+
+func limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > maxRequestBodyBytes {
+			writeError(w, http.StatusRequestEntityTooLarge, "请求体过大")
+			return
+		}
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -175,39 +204,20 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// statsHandler 仪表盘计数：按状态分组统计。
+// statsHandler 仪表盘计数：按当前用户可见范围统计（admin 全量，普通用户仅自己）。
 func (s *Server) statsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	stats := map[string]any{"total": 0, "has_update": 0, "error": 0, "ok": 0, "missing": 0, "unknown": 0}
-	// 简单实现：拉全量启用+停用的监控（千级规模可接受）
-	items, total, err := s.Store.ListMonitors(ctx, store.MonitorFilter{PerPage: 1, Page: 1})
+	counts, err := s.Store.CountMonitorStates(r.Context(), scopeOwnerID(r))
 	if err != nil {
 		writeInternalError(w, err)
 		return
 	}
-	stats["total"] = total
-	_ = items
-	for _, state := range []store.MonitorState{store.StateHasUpdate, store.StateError, store.StateMissing, store.StateUnknown, store.StateUpToDate} {
-		_, n, err := s.Store.ListMonitors(ctx, store.MonitorFilter{State: state, PerPage: 1})
-		if err != nil {
-			writeInternalError(w, err)
-			return
-		}
-		switch state {
-		case store.StateHasUpdate:
-			stats["has_update"] = n
-		case store.StateError:
-			stats["error"] = n
-		case store.StateMissing:
-			stats["missing"] = n
-		case store.StateUnknown:
-			stats["unknown"] = n
-		case store.StateUpToDate:
-			stats["ok"] = n
-		}
-	}
-	if _, lagging, err := s.Store.ListMonitors(ctx, store.MonitorFilter{CompareState: "lagging", PerPage: 1}); err == nil {
-		stats["lagging"] = lagging
-	}
-	writeJSON(w, http.StatusOK, stats)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total":      counts.Total,
+		"has_update": counts.HasUpdate,
+		"error":      counts.Error,
+		"ok":         counts.UpToDate,
+		"missing":    counts.Missing,
+		"unknown":    counts.Unknown,
+		"lagging":    counts.Lagging,
+	})
 }

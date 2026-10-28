@@ -9,9 +9,11 @@ const routes = [
     children: [
       { path: '', name: 'dashboard', component: () => import('@/views/DashboardView.vue') },
       { path: 'monitors', name: 'monitors', component: () => import('@/views/MonitorListView.vue') },
-      { path: 'monitors/new', name: 'monitor-new', component: () => import('@/views/MonitorEditView.vue') },
+      // perm/write 见路由守卫：前者按细粒度权限（可被 admin 授予），
+      // 后者按写权限（viewer 只读，编辑既有监控一律拒绝）
+      { path: 'monitors/new', name: 'monitor-new', component: () => import('@/views/MonitorEditView.vue'), meta: { perm: 'monitor.create' } },
       { path: 'monitors/:id', name: 'monitor-detail', component: () => import('@/views/MonitorDetailView.vue') },
-      { path: 'monitors/:id/edit', name: 'monitor-edit', component: () => import('@/views/MonitorEditView.vue') },
+      { path: 'monitors/:id/edit', name: 'monitor-edit', component: () => import('@/views/MonitorEditView.vue'), meta: { write: true } },
       { path: 'channels', name: 'channels', component: () => import('@/views/ChannelListView.vue') },
       { path: 'notifications', name: 'notifications', component: () => import('@/views/NotificationListView.vue') },
       { path: 'import', name: 'import', component: () => import('@/views/ImportView.vue') },
@@ -56,5 +58,7 @@ router.beforeEach(async (to) => {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
   if (to.meta.admin && auth.user.role !== 'admin') return { path: '/' }
+  if (to.meta.perm && !auth.can(to.meta.perm as string)) return { path: '/' }
+  if (to.meta.write && !auth.canWrite()) return { path: '/' }
   return true
 })

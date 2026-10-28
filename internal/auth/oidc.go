@@ -33,6 +33,9 @@ type pendingAuth struct {
 	CreatedAt    time.Time
 }
 
+// pendingAuthTTL 是 OIDC state 的有效期：超时后回调一律拒绝。
+const pendingAuthTTL = 10 * time.Minute
+
 // NewOIDCService 构造。
 func NewOIDCService(st store.Store, sessionTTL time.Duration, baseURL string) *OIDCService {
 	return &OIDCService{
@@ -64,9 +67,9 @@ func (s *OIDCService) Begin(ctx context.Context, providerName string) (redirectU
 	verifier := RandomToken(48)
 	state := RandomToken(24)
 	s.mu.Lock()
-	// 清理 10 分钟前的过期项
+	// 清理过期的待回调项
 	for k, v := range s.pending {
-		if time.Since(v.CreatedAt) > 10*time.Minute {
+		if time.Since(v.CreatedAt) > pendingAuthTTL {
 			delete(s.pending, k)
 		}
 	}
@@ -95,13 +98,13 @@ type OIDCUser struct {
 func (s *OIDCService) Complete(ctx context.Context, providerName, state, code string) (*store.User, error) {
 	s.mu.Lock()
 	pa, ok := s.pending[state]
+	if ok {
+		delete(s.pending, state) // state 一次性，无论后续校验是否通过
+	}
 	s.mu.Unlock()
-	if !ok || pa.ProviderName != providerName {
+	if !ok || pa.ProviderName != providerName || time.Since(pa.CreatedAt) > pendingAuthTTL {
 		return nil, fmt.Errorf("state 无效或已过期")
 	}
-	s.mu.Lock()
-	delete(s.pending, state)
-	s.mu.Unlock()
 
 	p, err := s.Store.OIDCProviderByName(ctx, providerName)
 	if err != nil {

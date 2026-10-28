@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -101,58 +102,62 @@ func main() {
 	// 通知渠道注册表（新增渠道在 internal/notifier/defaults.go 维护）
 	notifiers := notifier.NewDefaultRegistry()
 	dispatcher := &notify.Dispatcher{
+		Store:     st,
+		Notifiers: notifiers,
+	}
+	broker := httpapi.NewEventBroker()
+	// SSE 归属解析：monitorID → ownerID（admin 收全量，普通用户只收自己的）
+	broker.OwnerOf = func(monitorID int64) (int64, bool) {
+		m, err := st.GetMonitor(context.Background(), monitorID)
+		if err != nil {
+			return 0, false
+		}
+		return m.OwnerID, true
+	}
+	checker.OnEvent = func(ev check.Event) {
+		broker.BroadcastMonitor("check.done", ev.MonitorID, ev)
+	}
+
+	evaluator := compare.NewEvaluator(st, dispatcher.EnqueueCompare)
+	checker.OnChange = dispatcher.OnChange
+	checker.OnChecked = evaluator.EvaluateOnChecked
+	worker := &notify.Worker{
 		Store:       st,
 		Notifiers:   notifiers,
 		MaxAttempts: cfg.Notifications.Retry.MaxAttempts,
 		BaseDelay:   cfg.Notifications.Retry.BaseDelay,
 		MaxDelay:    cfg.Notifications.Retry.MaxDelay,
+		OnDelivery: func(status store.DeliveryStatus) {
+			broker.Broadcast("delivery.done", map[string]any{"status": status})
+		},
 	}
-		broker := httpapi.NewEventBroker()
-		// SSE 归属解析：monitorID → ownerID（admin 收全量，普通用户只收自己的）
-		broker.OwnerOf = func(monitorID int64) (int64, bool) {
-			m, err := st.GetMonitor(context.Background(), monitorID)
-			if err != nil {
-				return 0, false
-			}
-			return m.OwnerID, true
-		}
-		checker.OnEvent = func(ev check.Event) {
-			broker.BroadcastMonitor("check.done", ev.MonitorID, ev)
-		}
+	dispatcher.OnDelivery = worker.OnDelivery
 
-		evaluator := compare.NewEvaluator(st, dispatcher.EnqueueCompare)
-		checker.OnChange = dispatcher.OnChange
-		checker.OnChecked = evaluator.EvaluateOnChecked
-		worker := &notify.Worker{
-			Store:     st,
-			Notifiers: notifiers,
-			OnDelivery: func(status store.DeliveryStatus) {
-				broker.Broadcast("delivery.done", map[string]any{"status": status})
-			},
-		}
-		dispatcher.OnDelivery = worker.OnDelivery
+	// 渠道测试发送 / 手动重发
+	testSender := notify.NewTestSender(notifiers, st)
+	resendOne := func(ctx context.Context, d *store.Delivery) error {
+		worker.ProcessForced(ctx, d)
+		return nil
+	}
 
-		// 渠道测试发送 / 手动重发
-		testSender := notify.NewTestSender(notifiers, st)
-		resendOne := func(ctx context.Context, d *store.Delivery) error {
-			worker.ProcessForced(ctx, d)
-			return nil
-		}
-
-		srv := &httpapi.Server{
-			Auth:       authSvc,
-			OIDC:       oidcSvc,
-			Store:      st,
-			SecretBox:  box,
-			WebDist:    web.Dist(), // dev 构建标签下为 nil（前端走 Vite :5173）
-			Checker:    checker,
-			Registry:   registry,
-			Notifiers:  notifiers,
-			Evaluator:  evaluator,
-			Broker:     broker,
-			TestSender: testSender,
-			ResendOne:  resendOne,
-		}
+	loginLimiter := auth.NewAttemptLimiter(cfg.Security.LoginRateLimit, cfg.Security.LoginLockout, cfg.Security.LoginLockout)
+	srv := &httpapi.Server{
+		Auth:          authSvc,
+		OIDC:          oidcSvc,
+		Store:         st,
+		SecretBox:     box,
+		TrustProxy:    cfg.Server.TrustProxy,
+		SecureCookies: strings.HasPrefix(strings.ToLower(cfg.Server.BaseURL), "https://"),
+		WebDist:       web.Dist(), // dev 构建标签下为 nil（前端走 Vite :5173）
+		Checker:       checker,
+		Registry:      registry,
+		Notifiers:     notifiers,
+		Evaluator:     evaluator,
+		Broker:        broker,
+		TestSender:    testSender,
+		ResendOne:     resendOne,
+		LoginLimiter:  loginLimiter,
+	}
 	if srv.WebDist == nil {
 		slog.Info("dev 构建：静态资源未嵌入，前端请访问 Vite dev server (:5173)")
 	}
@@ -161,6 +166,10 @@ func main() {
 		Addr:              cfg.Server.Addr,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+		// 不设 WriteTimeout：SSE 是长连接，写超时会切断事件流。
 	}
 
 	hasUsers, err := authSvc.HasUsers(ctx)

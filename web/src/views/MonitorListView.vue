@@ -181,7 +181,7 @@ const hasSelected = computed(() => selected.value.length > 0)
         style="max-width: 280px"
       />
       <v-spacer />
-      <template v-if="hasSelected">
+      <template v-if="hasSelected && auth.canWrite()">
         <span class="text-medium-emphasis align-self-center me-2">{{ t('monitors.selectedCount', { n: selected.length }) }}</span>
         <v-btn height="48" variant="tonal" prepend-icon="mdi-play" @click="doBatch('enable')">{{ t('monitors.enable') }}</v-btn>
         <v-btn height="48" variant="tonal" prepend-icon="mdi-pause" @click="doBatch('disable')">{{ t('monitors.disable') }}</v-btn>
@@ -200,7 +200,7 @@ const hasSelected = computed(() => selected.value.length > 0)
       :loading="loading"
       :items-per-page-options="[10, 25, 50]"
       item-value="id"
-      show-select
+      :show-select="auth.canWrite()"
       return-object
       @update:options="onUpdateOptions"
     >
@@ -265,6 +265,7 @@ const hasSelected = computed(() => selected.value.length > 0)
       </template>
       <template #item.actions="{ item }">
         <v-btn
+          v-if="auth.canWrite()"
           icon="mdi-radar"
           size="small"
           variant="text"
@@ -272,7 +273,7 @@ const hasSelected = computed(() => selected.value.length > 0)
           :aria-label="t('monitors.checkNow')"
           @click="rowCheck(item)"
         />
-        <v-btn icon="mdi-pencil" size="small" variant="text" :to="`/monitors/${item.id}/edit`" :aria-label="t('common.edit')" />
+        <v-btn v-if="auth.canWrite()" icon="mdi-pencil" size="small" variant="text" :to="`/monitors/${item.id}/edit`" :aria-label="t('common.edit')" />
       </template>
       <template #no-data>
         <div class="py-8">

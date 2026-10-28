@@ -63,9 +63,6 @@ func ClearSessionCookie(w http.ResponseWriter) {
 	})
 }
 
-// SessionCookieName 供中间件读取。
-func SessionCookieName() string { return sessionCookie }
-
 // Middleware 认证中间件：支持会话 Cookie 与 Bearer Token。
 // 未认证时请求继续但 ctx 中无用户，由各 handler 或 requireAuth 决定拒绝。
 func Middleware(svc *Service) func(http.Handler) http.Handler {

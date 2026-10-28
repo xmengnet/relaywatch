@@ -176,6 +176,9 @@ func (h *ChannelHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "渠道不存在")
 		return
 	}
+	if !requireWrite(w, r) {
+		return
+	}
 	var p channelPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -232,6 +235,9 @@ func (h *ChannelHandler) remove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "渠道不存在")
 		return
 	}
+	if !requireWrite(w, r) {
+		return
+	}
 	if n, err := h.St.ChannelUsageCount(r.Context(), id); err == nil && n > 0 {
 		writeError(w, http.StatusConflict, "该渠道被 "+strconv.Itoa(n)+" 条监控使用，请先解除绑定")
 		return
@@ -259,6 +265,9 @@ func (h *ChannelHandler) test(w http.ResponseWriter, r *http.Request) {
 	}
 	if !canAccessChannel(authUser(r), c) {
 		writeError(w, http.StatusNotFound, "渠道不存在")
+		return
+	}
+	if !requireWrite(w, r) {
 		return
 	}
 	if h.TestSender == nil {

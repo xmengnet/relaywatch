@@ -169,7 +169,7 @@ async function submitRegister() {
         autocomplete="new-password"
       />
       <v-text-field v-model="regEmail" :label="t('auth.email')" type="email" autocomplete="email" />
-      <div class="d-flex align-start ga-2">
+      <div v-if="auth.registrationRequireEmail" class="d-flex align-start ga-2">
         <v-text-field
           v-model="regEmailCode" :label="t('auth.emailCode')" density="compact"
           :hint="t('auth.emailCodeHint')" persistent-hint

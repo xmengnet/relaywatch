@@ -56,9 +56,11 @@ func (h *MailConfigHandler) load(ctx context.Context) (*mailConfig, string, erro
 	}
 	pw := sc.PasswordEnc
 	if h.Box != nil && pw != "" {
-		if plain, err := h.Box.Decrypt(pw); err == nil {
-			pw = plain
+		plain, err := h.Box.Decrypt(pw)
+		if err != nil {
+			return nil, "", fmt.Errorf("邮件密码解密失败: %w", err)
 		}
+		pw = plain
 	}
 	return &sc.mailConfig, pw, nil
 }
@@ -154,9 +156,9 @@ func (h *MailConfigHandler) test(w http.ResponseWriter, r *http.Request) {
 
 // ---------- 系统邮件发送与验证码（供注册流程使用） ----------
 
-// SendSystemMail 对外暴露的系统邮件发送（handlers_auth 注册验证码用）。
-func SendSystemMail(ctx context.Context, st store.Store, to, subject, body string) error {
-	h := &MailConfigHandler{St: st}
+// SendSystemMail 用当前保存的配置发送系统邮件（注册验证码等）。
+// 必须走同一个 handler 实例，才能带上 SecretBox 解密 SMTP 密码。
+func (h *MailConfigHandler) SendSystemMail(ctx context.Context, to, subject, body string) error {
 	cfg, pw, err := h.load(ctx)
 	if err != nil {
 		return fmt.Errorf("全局邮件未配置")
@@ -184,16 +186,7 @@ func sendSystemMail(ctx context.Context, cfg *mailConfig, password, to, subject,
 
 // ---------- 注册邮箱验证码 ----------
 
-const settingRegCode = "registration.email_code" // JSON: {code, email, expires}
-
-type regCodeRecord struct {
-	Code    string `json:"code"`
-	Email   string `json:"email"`
-	Expires string `json:"expires"`
-	SentAt  string `json:"sent_at"` // 限流用：上次发送时间
-}
-
-// GenerateRegCode 生成 6 位验证码并落 settings（10 分钟有效），返回明文。
+// GenerateRegCode 生成 6 位验证码并落库（10 分钟有效），返回明文。
 func GenerateRegCode(ctx context.Context, st store.Store, email string) (string, error) {
 	b := make([]byte, 3)
 	if _, err := rand.Read(b); err != nil {
@@ -201,32 +194,34 @@ func GenerateRegCode(ctx context.Context, st store.Store, email string) (string,
 	}
 	code := fmt.Sprintf("%06d", (int(b[0])<<16|int(b[1])<<8|int(b[2]))%1000000)
 	now := time.Now()
-	rec := regCodeRecord{Code: code, Email: strings.ToLower(email), Expires: now.Add(10 * time.Minute).UTC().Format(time.RFC3339), SentAt: now.UTC().Format(time.RFC3339)}
-	raw, _ := json.Marshal(rec)
-	if err := st.SetSetting(ctx, settingRegCode, string(raw)); err != nil {
+	if err := st.PutRegistrationCode(ctx, email, code, now.Add(10*time.Minute), now); err != nil {
 		return "", err
 	}
+	_ = st.SweepRegistrationCodes(ctx)
 	return code, nil
 }
 
-// VerifyRegCode 校验并消费验证码（一次性）。
+// VerifyRegCode 校验并原子消费验证码（一次性，按邮箱隔离）。
 func VerifyRegCode(ctx context.Context, st store.Store, email, code string) error {
-	raw, err := st.GetSetting(ctx, settingRegCode)
-	if err != nil || raw == "" {
+	rec, ok, err := st.GetRegistrationCode(ctx, email)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return fmt.Errorf("请先获取验证码")
 	}
-	var rec regCodeRecord
-	_ = json.Unmarshal([]byte(raw), &rec)
-	if rec.Email != strings.ToLower(email) {
-		return fmt.Errorf("验证码与邮箱不匹配")
-	}
-	exp, _ := time.Parse(time.RFC3339, rec.Expires)
-	if time.Now().After(exp) {
+	if time.Now().After(rec.ExpiresAt) {
 		return fmt.Errorf("验证码已过期，请重新获取")
 	}
 	if rec.Code != code {
 		return fmt.Errorf("验证码不正确")
 	}
-	_ = st.SetSetting(ctx, settingRegCode, "") // 消费
+	consumed, err := st.ConsumeRegistrationCode(ctx, email, code, time.Now())
+	if err != nil {
+		return err
+	}
+	if !consumed {
+		return fmt.Errorf("验证码已失效，请重新获取")
+	}
 	return nil
 }

@@ -7,7 +7,7 @@ export interface SetupPayload {
 }
 
 export function authStatus() {
-  return apiFetch<{ setup_required: boolean; user: User | null; csrf_token?: string; registration_open?: boolean }>('/auth/status')
+  return apiFetch<{ setup_required: boolean; user: User | null; csrf_token?: string; registration_open?: boolean; registration_require_email?: boolean }>('/auth/status')
 }
 
 export function login(username: string, password: string) {

@@ -6,17 +6,18 @@ import StatusChip from '@/components/StatusChip.vue'
 import RelativeTime from '@/components/RelativeTime.vue'
 import VersionDiff from '@/components/VersionDiff.vue'
 import { useSse } from '@/composables/useSse'
+import { useAuthStore } from '@/stores/auth'
 import { getMonitor, checkNow, ackMonitor, listHistory, listChanges, type CheckHistoryItem, type VersionChangeItem } from '@/api/monitors'
 import type { Monitor } from '@/api/types'
 
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 
 const monitor = ref<Monitor | null>(null)
 const checking = ref(false)
 const acking = ref(false)
-const checkResult = ref<{ ok: boolean; version?: string; error?: string; state: string } | null>(null)
 const history = ref<CheckHistoryItem[]>([])
 const changes = ref<VersionChangeItem[]>([])
 const snackbar = ref(false)
@@ -71,10 +72,8 @@ useSse('check.done', (data: any) => {
 
 async function doCheck() {
   checking.value = true
-  checkResult.value = null
   try {
     const r = await checkNow(id.value)
-    checkResult.value = r
     snackbarText.value = r.ok
       ? t('monitors.detail.checkSuccess', { version: r.version ?? '—', ms: r.duration_ms })
       : t('monitors.detail.checkFailed', { error: r.error })
@@ -117,10 +116,11 @@ async function doDelete() {
       <div class="text-h5">{{ monitor.name }}</div>
       <StatusChip :state="monitor.state" />
       <v-spacer />
-      <v-btn color="primary" :loading="checking" prepend-icon="mdi-radar" @click="doCheck">{{ t('monitors.checkNow') }}</v-btn>
-      <v-btn v-if="canAck" color="warning" :loading="acking" prepend-icon="mdi-check" @click="doAck">{{ t('monitors.detail.ack') }}</v-btn>
-      <v-btn variant="text" :to="`/monitors/${id}/edit`" prepend-icon="mdi-pencil">{{ t('common.edit') }}</v-btn>
-      <v-btn variant="text" color="error" prepend-icon="mdi-delete" @click="doDelete">{{ t('common.delete') }}</v-btn>
+      <!-- 写操作仅 admin/user 可见；viewer 只读（服务端同样拒绝） -->
+      <v-btn v-if="auth.canWrite()" color="primary" :loading="checking" prepend-icon="mdi-radar" @click="doCheck">{{ t('monitors.checkNow') }}</v-btn>
+      <v-btn v-if="canAck && auth.canWrite()" color="warning" :loading="acking" prepend-icon="mdi-check" @click="doAck">{{ t('monitors.detail.ack') }}</v-btn>
+      <v-btn v-if="auth.canWrite()" variant="text" :to="`/monitors/${id}/edit`" prepend-icon="mdi-pencil">{{ t('common.edit') }}</v-btn>
+      <v-btn v-if="auth.canWrite()" variant="text" color="error" prepend-icon="mdi-delete" @click="doDelete">{{ t('common.delete') }}</v-btn>
     </div>
 
     <v-row>

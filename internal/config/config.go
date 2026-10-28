@@ -11,8 +11,9 @@ import (
 // Config 是 relaywatch.yaml 的完整结构。
 type Config struct {
 	Server struct {
-		Addr    string `yaml:"addr"`
-		BaseURL string `yaml:"base_url"`
+		Addr       string `yaml:"addr"`
+		BaseURL    string `yaml:"base_url"`
+		TrustProxy bool   `yaml:"trust_proxy"` // 信任反向代理的 X-Forwarded-For / X-Real-IP
 	} `yaml:"server"`
 
 	Database struct {

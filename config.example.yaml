@@ -1,6 +1,9 @@
 server:
   addr: ":3721"
   base_url: "http://localhost:8080"
+  # 部署在反向代理之后时设为 true，才会采信 X-Forwarded-For / X-Real-IP；
+  # 直连部署保持 false，防止客户端伪造来源 IP 绕过登录限流。
+  trust_proxy: false
 
 database:
   path: "./data/relaywatch.db"
@@ -11,6 +14,7 @@ security:
   # 轮换：新密钥写到这里，旧密钥放 old_secret_key 过渡
   secret_key: ""
   session_ttl: "168h"
+  # 登录失败按 IP + 用户名计数；累计 5 次失败后锁定 15 分钟
   login_rate_limit: 5
   login_lockout: "15m"
 

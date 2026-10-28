@@ -34,7 +34,7 @@ RelayWatch 把前者的精确版本检测和后者的 Web 操作体验结合起�
 
 ## 状态
 
-**M1–M6 全部完成并全量测试通过**：核心版本更新检测、双轨对比系统（M6）、SSE 实时事件通道（M6）与 nvchecker 33 种监控源全量无损导入均已就绪。
+**M1–M8 全部完成并全量测试通过**：核心版本更新检测、双轨对比、SSE 实时事件、nvchecker 33 种监控源无损导入，以及多用户/权限、网站管理、帮助中心与中英双语界面均已就绪。
 
 **监控源**（33）：
 - **代码托管与 VCS**：`github_release` / `github_tag` / `gitlab_release` / `gitea_release` / `bitbucket` / `pagure` / `git_tag` (通用 Git)
@@ -55,7 +55,11 @@ RelayWatch 把前者的精确版本检测和后者的 Web 操作体验结合起�
 - **调度与限速**：ticker + 确定性抖动 + per-host 令牌桶限速 + 优雅关停（在途任务排空落库）
 - **通知编排**：text/template 模板、投递队列（指数退避、静默期 deferred、补发前校验、ack 作废）
 - **导入与导出**：nvchecker keyfile（TOML）100% 无损导入（pacman/alpm 透明转官方 API）；JSON 导出（默认脱敏）
-- **运维与部署**：`/metrics` Prometheus 指标、单二进制 Dockerfile、systemd unit
+- **多用户与权限**：admin / user / viewer 三级角色、细粒度操作权限、资源归属隔离、注册开关与邮箱验证码、全局邮件配置
+- **网站管理**：站点级 API 镜像、源站点默认值、系统告警渠道、OIDC Provider 与注册/邮件配置
+- **帮助中心**：33 种源参考、13 种渠道指南、模板变量与预设、双轨对比与 nvchecker 迁移说明
+- **中英双语**：界面与源/渠道元数据双语，语言偏好持久化，Vuetify 内置文案同步切换
+- **运维与部署**：`/metrics` Prometheus 指标、单二进制 Dockerfile（非 root 运行）、systemd unit
 
 ## 构建与开发
 

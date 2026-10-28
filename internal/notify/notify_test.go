@@ -84,7 +84,7 @@ func TestDispatcherCooldown(t *testing.T) {
 	}
 	// deferred 记录的 next_attempt 在冷静期结束（1 小时后），不在 due 范围内；
 	// 直接查该监控的投递列表验证状态与排期
-	dl, _, err := st.ListDeliveries(context.Background(), m.ID, 0, "", 1, 10)
+	dl, _, err := st.ListDeliveries(context.Background(), m.ID, 0, "", 0, 1, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,14 +213,36 @@ func TestWorkerCancelOnAcked(t *testing.T) {
 }
 
 func TestBackoff(t *testing.T) {
-	d := &Dispatcher{BaseDelay: 2 * time.Second, MaxDelay: time.Minute}
+	w := &Worker{BaseDelay: 2 * time.Second, MaxDelay: time.Minute}
 	cases := []struct{ attempts, wantSec int }{
 		{1, 2}, {2, 4}, {3, 8}, {6, 60},
 	}
 	for _, c := range cases {
-		got := d.backoff(c.attempts)
+		got := w.backoff(c.attempts)
 		if got != time.Duration(c.wantSec)*time.Second {
 			t.Errorf("backoff(%d) = %v, want %ds", c.attempts, got, c.wantSec)
 		}
+	}
+}
+
+// TestRetryConfigHonored 锁住 notifications.retry 配置接线：非零值生效，零值回退默认。
+func TestRetryConfigHonored(t *testing.T) {
+	w := &Worker{MaxAttempts: 7, BaseDelay: 3 * time.Second, MaxDelay: 30 * time.Second}
+	if got := w.maxAttempts(); got != 7 {
+		t.Errorf("maxAttempts = %d, want 7", got)
+	}
+	if got := w.backoff(1); got != 3*time.Second {
+		t.Errorf("backoff(1) = %v, want 3s", got)
+	}
+	if got := w.backoff(99); got != 30*time.Second {
+		t.Errorf("backoff(99) = %v, want clamp 30s", got)
+	}
+
+	def := &Worker{}
+	if got := def.maxAttempts(); got != 5 {
+		t.Errorf("default maxAttempts = %d, want 5", got)
+	}
+	if got := def.backoff(1); got != 2*time.Second {
+		t.Errorf("default backoff(1) = %v, want 2s", got)
 	}
 }

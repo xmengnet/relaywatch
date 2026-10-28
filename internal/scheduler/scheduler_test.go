@@ -18,9 +18,12 @@ func TestJitterDeterministic(t *testing.T) {
 func TestHostLimiter(t *testing.T) {
 	h := NewHostLimiter(2, map[string]int{"api.github.com": 1})
 	now := time.Now()
-	// 默认 host:2/分钟
-	if !h.Allow("aur.archlinux.org", now) || !h.Allow("aur.archlinux.org", now) {
-		t.Fatal("expected 2 allows")
+	// 默认 host:2/分钟（两次调用都有副作用，不能合并成一个条件表达式）
+	if !h.Allow("aur.archlinux.org", now) {
+		t.Fatal("expected 1st allow")
+	}
+	if !h.Allow("aur.archlinux.org", now) {
+		t.Fatal("expected 2nd allow")
 	}
 	if h.Allow("aur.archlinux.org", now) {
 		t.Fatal("expected deny on 3rd")

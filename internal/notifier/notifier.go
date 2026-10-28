@@ -99,10 +99,6 @@ func (r *Registry) Get(typ string) (Notifier, bool) {
 	return n, ok
 }
 
-func (r *Registry) Types() []string {
-	return append([]string(nil), r.order...)
-}
-
 // Metas 全部渠道元数据。
 func (r *Registry) Metas() []Meta {
 	out := make([]Meta, 0, len(r.order))

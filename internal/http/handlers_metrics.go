@@ -37,8 +37,8 @@ func (h *MetricsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(&b, "# TYPE relaywatch_monitors_enabled gauge")
 	fmt.Fprintf(&b, "relaywatch_monitors_enabled %d\n", len(enabled))
 
-	_, pending, _ := h.St.ListDeliveries(ctx, 0, 0, store.DeliveryPending, 1, 1)
-	_, failed, _ := h.St.ListDeliveries(ctx, 0, 0, store.DeliveryFailed, 1, 1)
+	_, pending, _ := h.St.ListDeliveries(ctx, 0, 0, store.DeliveryPending, 0, 1, 1)
+	_, failed, _ := h.St.ListDeliveries(ctx, 0, 0, store.DeliveryFailed, 0, 1, 1)
 	fmt.Fprintln(&b, "# HELP relaywatch_deliveries 投递队列")
 	fmt.Fprintln(&b, "# TYPE relaywatch_deliveries gauge")
 	fmt.Fprintf(&b, "relaywatch_deliveries{status=\"pending\"} %d\n", pending)

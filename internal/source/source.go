@@ -91,11 +91,6 @@ func (r *Registry) Get(typ string) (Source, bool) {
 	return s, ok
 }
 
-// Types 按注册顺序返回全部类型。
-func (r *Registry) Types() []string {
-	return append([]string(nil), r.order...)
-}
-
 // Metas 返回全部源的元数据（实现 MetaProvider 的才返回）。
 func (r *Registry) Metas() []Meta {
 	out := make([]Meta, 0, len(r.order))

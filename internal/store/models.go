@@ -25,6 +25,16 @@ func (u *User) Can(perm string) bool {
 	return false
 }
 
+// CanWrite 判定用户能否增删改既有资源（监控/渠道等）：admin 与 user 可写，viewer 只读。
+// 与 Can 的区别：Can 管的是四个「附加操作」（创建/导入/导出），viewer 可被显式授予；
+// CanWrite 管的是对既有资源的增删改，viewer 一律拒绝（docs/design.md §19.3 / §19.6）。
+func (u *User) CanWrite() bool {
+	if u == nil {
+		return false
+	}
+	return u.Role == "admin" || u.Role == "user"
+}
+
 // UserFilter 用户管理列表查询条件（admin 用）。
 type UserFilter struct {
 	Role    string // 空 = 全部
@@ -160,6 +170,17 @@ type MonitorFilter struct {
 	PerPage      int
 	SortBy       string
 	SortOrder    string // asc | desc
+}
+
+// MonitorCounts 仪表盘计数（按 owner 过滤；ownerID=0 表示全量）。
+type MonitorCounts struct {
+	Total     int
+	UpToDate  int
+	HasUpdate int
+	Error     int
+	Missing   int
+	Unknown   int
+	Lagging   int
 }
 
 // CheckHistory 一次检查的记录。

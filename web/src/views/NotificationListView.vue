@@ -2,9 +2,11 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listDeliveries, resendDelivery, type Delivery } from '@/api/channels'
+import { useAuthStore } from '@/stores/auth'
 import RelativeTime from '@/components/RelativeTime.vue'
 
 const { t } = useI18n()
+const auth = useAuthStore()
 
 const loading = ref(true)
 const items = ref<Delivery[]>([])
@@ -141,7 +143,7 @@ function canResend(d: Delivery) {
       </template>
       <template #item.actions="{ item }">
         <v-btn
-          v-if="canResend(item)"
+          v-if="canResend(item) && auth.canWrite()"
           size="small"
           variant="text"
           prepend-icon="mdi-send-clock"

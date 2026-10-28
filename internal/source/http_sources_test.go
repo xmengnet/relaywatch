@@ -187,7 +187,7 @@ func TestDockerTagSource(t *testing.T) {
 				return
 			}
 			// page 1
-			nextURL := fmt.Sprintf("https://hub.docker.com/v2/repositories/library/nginx/tags?page=2")
+			nextURL := "https://hub.docker.com/v2/repositories/library/nginx/tags?page=2"
 			fmt.Fprintf(w, `{
 				"results": [
 					{"name": "latest"},

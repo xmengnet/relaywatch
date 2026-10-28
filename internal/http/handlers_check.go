@@ -68,6 +68,9 @@ func (h *CheckHandler) checkNow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "监控不存在") // 404 语义，防枚举
 		return
 	}
+	if !requireWrite(w, r) {
+		return
+	}
 	if !m.Enabled {
 		writeError(w, http.StatusBadRequest, "监控已停用")
 		return
@@ -101,6 +104,9 @@ func (h *CheckHandler) ack(w http.ResponseWriter, r *http.Request) {
 	}
 	if !canAccessMonitor(u, m) {
 		writeError(w, http.StatusNotFound, "监控不存在")
+		return
+	}
+	if !requireWrite(w, r) {
 		return
 	}
 	open, err := h.St.OpenVersionChange(r.Context(), id)

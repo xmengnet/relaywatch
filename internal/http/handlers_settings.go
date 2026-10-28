@@ -45,58 +45,86 @@ type settingsResponse struct {
 	RegistrationRequireEmail bool    `json:"registration_require_email"`
 }
 
-func (h *SettingsHandler) get(w http.ResponseWriter, r *http.Request) {
+// settingsPatch 是 PUT 的请求体：指针字段用于区分「未传」与「显式设为零值」，
+// 避免局部更新把其他设置覆盖回默认值。
+type settingsPatch struct {
+	AlertChannelIDs          *[]int64 `json:"alert_channel_ids"`
+	RegistrationEnabled      *bool    `json:"registration_enabled"`
+	RegistrationDefaultRole  *string  `json:"registration_default_role"`
+	RegistrationRequireEmail *bool    `json:"registration_require_email"`
+}
+
+// load 读取当前设置并补齐默认值。
+func (h *SettingsHandler) load(ctx context.Context) settingsResponse {
 	resp := settingsResponse{AlertChannelIDs: []int64{}, RegistrationDefaultRole: "user"}
-	raw, err := h.St.GetSetting(r.Context(), settingAlertChannels)
+	raw, err := h.St.GetSetting(ctx, settingAlertChannels)
 	if err == nil && raw != "" {
 		_ = json.Unmarshal([]byte(raw), &resp.AlertChannelIDs)
 	}
-	resp.RegistrationEnabled = registrationEnabled(r.Context(), h.St)
-	if v, err := h.St.GetSetting(r.Context(), settingRegistrationRole); err == nil && v != "" {
+	resp.RegistrationEnabled = registrationEnabled(ctx, h.St)
+	if v, err := h.St.GetSetting(ctx, settingRegistrationRole); err == nil && v != "" {
 		resp.RegistrationDefaultRole = v
 	}
-	if v, err := h.St.GetSetting(r.Context(), settingRegistrationNeedMail); err == nil {
+	if v, err := h.St.GetSetting(ctx, settingRegistrationNeedMail); err == nil {
 		resp.RegistrationRequireEmail = v == "true"
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp
+}
+
+func (h *SettingsHandler) get(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.load(r.Context()))
 }
 
 func (h *SettingsHandler) put(w http.ResponseWriter, r *http.Request) {
-	var req settingsResponse
+	var req settingsPatch
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	role := req.RegistrationDefaultRole
-	if role == "" {
-		role = "user" // 未传时保持默认，避免部分更新被拒
+
+	// 先读后写：只覆盖请求里出现的字段，未出现的保持原值。
+	cur := h.load(r.Context())
+	if req.AlertChannelIDs != nil {
+		cur.AlertChannelIDs = *req.AlertChannelIDs
 	}
-	if role != "user" && role != "viewer" {
+	if req.RegistrationEnabled != nil {
+		cur.RegistrationEnabled = *req.RegistrationEnabled
+	}
+	if req.RegistrationDefaultRole != nil {
+		cur.RegistrationDefaultRole = *req.RegistrationDefaultRole
+	}
+	if req.RegistrationRequireEmail != nil {
+		cur.RegistrationRequireEmail = *req.RegistrationRequireEmail
+	}
+	if cur.RegistrationDefaultRole == "" {
+		cur.RegistrationDefaultRole = "user"
+	}
+	if cur.RegistrationDefaultRole != "user" && cur.RegistrationDefaultRole != "viewer" {
 		writeError(w, http.StatusBadRequest, "registration_default_role 只能是 user 或 viewer")
 		return
 	}
-	if req.AlertChannelIDs == nil {
-		req.AlertChannelIDs = []int64{}
+	if cur.AlertChannelIDs == nil {
+		cur.AlertChannelIDs = []int64{}
 	}
-	raw, _ := json.Marshal(req.AlertChannelIDs)
+
+	raw, _ := json.Marshal(cur.AlertChannelIDs)
 	if err := h.St.SetSetting(r.Context(), settingAlertChannels, string(raw)); err != nil {
 		writeInternalError(w, err)
 		return
 	}
-	if err := h.St.SetSetting(r.Context(), settingRegistrationEnabled, boolStr(req.RegistrationEnabled)); err != nil {
+	if err := h.St.SetSetting(r.Context(), settingRegistrationEnabled, boolStr(cur.RegistrationEnabled)); err != nil {
 		writeInternalError(w, err)
 		return
 	}
-	if err := h.St.SetSetting(r.Context(), settingRegistrationRole, role); err != nil {
+	if err := h.St.SetSetting(r.Context(), settingRegistrationRole, cur.RegistrationDefaultRole); err != nil {
 		writeInternalError(w, err)
 		return
 	}
-	if err := h.St.SetSetting(r.Context(), settingRegistrationNeedMail, boolStr(req.RegistrationRequireEmail)); err != nil {
+	if err := h.St.SetSetting(r.Context(), settingRegistrationNeedMail, boolStr(cur.RegistrationRequireEmail)); err != nil {
 		writeInternalError(w, err)
 		return
 	}
-	req.RegistrationDefaultRole = role
-	writeJSON(w, http.StatusOK, req)
+	writeJSON(w, http.StatusOK, cur)
 }
 
 func boolStr(b bool) string {
@@ -104,15 +132,4 @@ func boolStr(b bool) string {
 		return "true"
 	}
 	return "false"
-}
-
-// AlertChannelIDs 读取告警渠道配置（AlertSender 用）。
-func AlertChannelIDs(ctx context.Context, st store.Store) []int64 {
-	raw, err := st.GetSetting(ctx, settingAlertChannels)
-	if err != nil || raw == "" {
-		return nil
-	}
-	var ids []int64
-	_ = json.Unmarshal([]byte(raw), &ids)
-	return ids
 }

@@ -25,6 +25,21 @@ type multiUserEnv struct {
 
 func newMultiUserEnv(t *testing.T) *multiUserEnv {
 	t.Helper()
+	return newMultiUserEnvWithOptions(t, nil, nil)
+}
+
+func newMultiUserEnvWithBox(t *testing.T, box store.SecretBox) *multiUserEnv {
+	t.Helper()
+	return newMultiUserEnvWithOptions(t, box, nil)
+}
+
+func newMultiUserEnvWithLimiter(t *testing.T, limiter *auth.AttemptLimiter) *multiUserEnv {
+	t.Helper()
+	return newMultiUserEnvWithOptions(t, nil, limiter)
+}
+
+func newMultiUserEnvWithOptions(t *testing.T, box store.SecretBox, limiter *auth.AttemptLimiter) *multiUserEnv {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -34,8 +49,17 @@ func newMultiUserEnv(t *testing.T) *multiUserEnv {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if box != nil {
+		st.SetSecretBox(box)
+	}
 	svc := auth.NewService(st, time.Hour)
-	s := &Server{Auth: svc, Store: st, Notifiers: notifier.NewDefaultRegistry()}
+	s := &Server{
+		Auth:         svc,
+		Store:        st,
+		Notifiers:    notifier.NewDefaultRegistry(),
+		SecretBox:    box,
+		LoginLimiter: limiter,
+	}
 	return &multiUserEnv{st: st, svc: svc, h: s.Handler()}
 }
 

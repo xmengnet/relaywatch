@@ -690,7 +690,7 @@ err := bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(pw))
 
 ### 6.4 限流
 
-登录接口用令牌桶，每 IP 每分钟 5 次，失败 10 次锁定 15 分钟（记录在内存，重启清零，可接受）。
+登录失败按「IP + 用户名」计数：累计 `login_rate_limit` 次失败后锁定 `login_lockout`（默认 5 次 / 15 分钟，内存记录，重启清零）。注册验证码发送按 IP 限流，防止匿名端点被用来批量发信。客户端 IP 默认取 socket 地址；部署在反向代理后需开启 `server.trust_proxy` 才会采信 `X-Forwarded-For` / `X-Real-IP`。
 
 ### 6.5 API Token 认证
 
@@ -717,7 +717,12 @@ err := bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(pw))
 | `/monitors/:id/edit` | `MonitorEditView` | 编辑 |
 | `/channels` | `ChannelListView` | 渠道列表 |
 | `/notifications` | `NotificationListView` | 通知历史 |
-| `/settings` | `SettingsView` | 系统设置（仅 admin） |
+| `/import` | `ImportView` | nvchecker 批量导入 |
+| `/help` | `HelpView` | 帮助中心 |
+| `/profile` | `ProfileView` | 个人资料 / 语言 / 会话 |
+| `/site` | `SiteConfigView` | 网站管理（仅 admin） |
+| `/users` | `UserListView` | 用户管理（仅 admin） |
+| `/settings` | `SettingsView` | 系统设置 / 导出（仅 admin） |
 | `/login` | `LoginView` | 登录（BlankLayout） |
 | `/setup` | `SetupView` | 首次引导（BlankLayout） |
 
@@ -1955,8 +1960,8 @@ security:
   secret_key: ""              # 32 字节 base64，用于加密敏感字段
   old_secret_key: ""          # 轮换期过渡：解密时新密钥失败后回退尝试；relaywatch rekey 完成后删除
   session_ttl: "168h"
-  login_rate_limit: 5         # 每分钟每 IP
-  login_lockout: 15m
+  login_rate_limit: 5         # 锁定前允许的失败次数（按 IP + 用户名）
+  login_lockout: 15m          # 达到失败次数后的锁定时长
 
 scheduler:
   tick: "10s"
@@ -2358,7 +2363,7 @@ Checker.Check 成功落库
 复用 deliveries：对比通知插入 `kind='compare'` 记录，由现有 worker 消费（退避重试、静默期 deferred、历史、手动重发全部沿用）。
 
 - **渠道**：跟随监控绑定的渠道；未绑定则不发送（UI 给提示，不自动回落系统告警渠道，避免稀释「系统告警」语义）
-- **消息**：`TemplateData` 扩展 `Compare{RefMonitorName, RefVersion, FollowerVersion, State}`，默认模板与自定义模板同机制；标题形如「RelayWatch：AUR foo 落后于上游」
+- **消息**：`TemplateData` 扩展 `Compare{RefMonitorName, RefVersion, FollowerVersion, State, Event}`，默认模板与自定义模板同机制；标题形如「RelayWatch：AUR foo 落后于上游」。默认对比正文为多行结构：事件图标（⚠️ 追平 ✅ / 差距扩大 📉）+ 本包行（名+源类型+版本）+ 上游行 + 差距线（`follower ⇐ ref`，一致时显示「两侧版本一致」）+ 可选上游链接 + 状态（`compareStateText` 渲染为落后/已同步/领先）+ 时间
 - **worker 分支**：`kind='compare'` 的补发前校验 = 「事件是否仍成立」——`entered_lagging`/`gap_grew` 要求当前仍 `lagging`、`caught_up` 要求当前 `in_sync`，且跟随监控 enabled、参照关系仍在；不成立 → `canceled`（原因写 `last_error`，供通知历史展示）
 - **手动重发（Force）**：跳过事件校验，按**当前**对比状态渲染（与 update 重发「版本取发送时刻 latest」一致）
 
@@ -2726,7 +2731,7 @@ UPDATE monitors SET owner_id = (SELECT id FROM users WHERE role='admin' ORDER BY
 注册流程复用现有本地账户体系：
 
 - `POST /api/v1/auth/register`（无需登录）：用户名 + 密码（+可选邮箱），bcrypt 落库，角色取 `registration.default_role`
-- 复用登录接口的限流（每 IP 每分钟 5 次）与用户名占用校验
+- 复用登录接口的失败限流（按 IP + 用户名）与用户名占用校验；`send-code` 另按 IP 限流
 - 注册成功即自动登录（建会话）；`registration.enabled=false` 时该端点 404 且审计不记（避免探测）
 - 系统告警渠道：注册发生时向 admin 告警渠道投递一条通知（复用现有 alert 渠道机制），可及时发现滥用
 
@@ -2783,6 +2788,7 @@ UPDATE monitors SET owner_id = (SELECT id FROM users WHERE role='admin' ORDER BY
 - 新增统一 helper `requireMonitorAccess(r, id) (*Monitor, error)` / `requireChannelAccess`：admin 直通；否则校验 `owner == user.ID`，失败返回 **404 而非 403**（避免资源枚举）
 - 所有 `/api/v1/monitors/{id}/*` 与 `/api/v1/channels/{id}/*` 入口套用；创建时服务端强制 `OwnerID = user.ID`（不接受请求体传入），admin 建渠道时可选「共享」
 - 批量操作 `/monitors/batch` 先做归属过滤，非本人资源静默跳过（不整体失败）
+- **写操作闸门**（实现补记，2026-10-28）：归属校验之后追加统一 helper `requireWrite`，`User.CanWrite()` 判定 admin/user 可写、**viewer 恒拒（403）**。作用于 `PATCH/DELETE /monitors/{id}`、`POST /monitors/batch`、`POST /monitors/{id}/check`、`POST /monitors/{id}/ack`、`PATCH/DELETE /channels/{id}`、`POST /channels/{id}/test`、`POST /deliveries/{id}/resend`。此前只拦截了「创建」，用户由 user 降级为 viewer 后仍能增删改自己名下资源（§19.3 明示「所有写操作被拒绝」）——本次补齐。`POST /monitors/validate` 为纯本地配置校验（无网络、无落库），不设闸；前端同步隐藏写入口（`auth.canWrite()` + 路由 meta `write`/`perm`）
 
 #### 双轨对比约束
 
@@ -2842,6 +2848,7 @@ UPDATE monitors SET owner_id = (SELECT id FROM users WHERE role='admin' ORDER BY
 - `users.permissions` 存 JSON 数组（迁移 0007）；**NULL = 未配置，按角色默认**（user 全量 / viewer 只读），**`[]` = 显式全禁**
 - `User.Can(perm)`：admin 恒真；显式配置优先；nil 回退角色默认
 - 校验点：创建监控（POST /monitors）、创建渠道（POST /channels）、导入（preview+import）、导出（export），权限不足统一 **403**（与资源不存在 404 语义区分）
+- **`User.CanWrite()` 与 `Can` 分工**：`Can` 只管上表四个附加操作，admin 可对 viewer 显式授予（如 viewer + `monitor.create` 允许创建）；`CanWrite` 管既有资源的增删改，**按角色判定，viewer 恒拒**，显式 permissions 不解除只读（改动点见 §19.6 HTTP 层「写操作闸门」）
 - 角色变更时若未显式传 permissions，权限重置为新角色默认（防 viewer 保留建监控权限）
 - 用户管理 API 的 create/patch 接受 `permissions`；adminUserResponse 返回（null 表示按角色默认，前端提示）
 - 明确不做：自定义任意权限项（新需求时在 AllPermissions 常量扩展）、按资源（单条监控）级 ACL

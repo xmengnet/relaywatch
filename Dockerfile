@@ -18,8 +18,14 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /relaywatch ./cmd/relay
 
 # 运行
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S relaywatch \
+    && adduser -S -G relaywatch -h /data relaywatch \
+    && mkdir -p /data \
+    && chown -R relaywatch:relaywatch /data
 COPY --from=backend /relaywatch /usr/local/bin/relaywatch
+USER relaywatch
+WORKDIR /data
 VOLUME /data
 EXPOSE 8080
 # RELAYWATCH_SECRET_KEY 必须通过环境变量（-e）或挂载的 config.yaml 提供

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -15,8 +16,11 @@ import (
 
 // AuthHandler 登录、登出、首次引导、状态查询。
 type AuthHandler struct {
-	Svc   *auth.Service
-	Store store.Store
+	Svc           *auth.Service
+	Store         store.Store
+	Mail          *MailConfigHandler   // 注册验证码发信；nil 时该功能不可用
+	Limiter       *auth.AttemptLimiter // 登录失败/发码限流；nil 时不限制
+	SecureCookies bool                 // base_url 为 https 时强制 Secure Cookie
 }
 
 const (
@@ -54,10 +58,11 @@ func (h *AuthHandler) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{
-		"setup_required":    !has,
-		"user":              nil,
-		"csrf_token":        "",
-		"registration_open": h.Store != nil && registrationEnabled(r.Context(), h.Store),
+		"setup_required":             !has,
+		"user":                       nil,
+		"csrf_token":                 "",
+		"registration_open":          h.Store != nil && registrationEnabled(r.Context(), h.Store),
+		"registration_require_email": h.Store != nil && registrationNeedEmail(r.Context(), h.Store),
 	}
 	if u := auth.UserFromContext(r.Context()); u != nil {
 		resp["user"] = toUserResponse(u)
@@ -107,8 +112,14 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+	key := loginKey(r, req.Username)
+	if !h.Limiter.Allow(key) {
+		writeError(w, http.StatusTooManyRequests, "登录尝试过于频繁，请稍后再试")
+		return
+	}
 	u, sess, err := h.Svc.Login(r.Context(), req.Username, req.Password, r.UserAgent(), clientIP(r))
 	if errors.Is(err, auth.ErrInvalidCredentials) {
+		h.Limiter.Hit(key)
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -116,7 +127,8 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
-	secure := r.TLS != nil
+	h.Limiter.Reset(key)
+	secure := secureCookie(r, h.SecureCookies)
 	auth.SetSessionCookie(w, sess.ID, int(sess.ExpiresAt.Sub(sess.CreatedAt).Seconds()), secure)
 	writeJSON(w, http.StatusOK, map[string]any{"user": toUserResponse(u), "csrf_token": sess.CSRFToken})
 }
@@ -126,7 +138,7 @@ func (h *AuthHandler) newSession(w http.ResponseWriter, r *http.Request, u *stor
 	if err != nil {
 		return nil, err
 	}
-	secure := r.TLS != nil
+	secure := secureCookie(r, h.SecureCookies)
 	auth.SetSessionCookie(w, sess.ID, int(sess.ExpiresAt.Sub(sess.CreatedAt).Seconds()), secure)
 	return sess, nil
 }
@@ -148,11 +160,19 @@ func (h *AuthHandler) csrf(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"csrf_token": sess.CSRFToken})
 }
 
+// clientIP 取客户端地址。默认只信 socket 地址；开启 server.trust_proxy 后，
+// middleware.RealIP 已把 RemoteAddr 替换为转发头里的地址。
 func clientIP(r *http.Request) string {
-	if v := r.Header.Get("X-Forwarded-For"); v != "" {
-		return v
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
 	}
-	return r.RemoteAddr
+	return host
+}
+
+// loginKey 按 IP + 用户名限流：既防单账户爆破，也避免不同用户互相影响。
+func loginKey(r *http.Request, username string) string {
+	return "login:" + clientIP(r) + "|" + strings.ToLower(strings.TrimSpace(username))
 }
 
 // registerSendCode 发送注册邮箱验证码：注册开启 + require_email + 全局邮件已配置才可用。
@@ -163,6 +183,12 @@ func (h *AuthHandler) registerSendCode(w http.ResponseWriter, r *http.Request) {
 	}
 	if !registrationNeedEmail(r.Context(), h.Store) {
 		writeError(w, http.StatusBadRequest, "注册未开启邮箱验证")
+		return
+	}
+	// 匿名端点按 IP 限流，防止被用来批量发信
+	limitKey := "sendcode:" + clientIP(r)
+	if !h.Limiter.Allow(limitKey) {
+		writeError(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
 		return
 	}
 	var req struct {
@@ -177,14 +203,12 @@ func (h *AuthHandler) registerSendCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "邮箱格式不正确")
 		return
 	}
-	// 防滥用：同一邮箱 60 秒内只发一次（上次发送时间记录在验证码记录里）
-	if raw, err := h.Store.GetSetting(r.Context(), settingRegCode); err == nil && raw != "" {
-		var rec regCodeRecord
-		if json.Unmarshal([]byte(raw), &rec) == nil && rec.Email == strings.ToLower(email) {
-			if sent, _ := time.Parse(time.RFC3339, rec.SentAt); time.Since(sent) < time.Minute {
-				writeError(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
-				return
-			}
+	h.Limiter.Hit(limitKey)
+	// 防滥用：同一邮箱 60 秒内只发一次
+	if rec, ok, err := h.Store.GetRegistrationCode(r.Context(), email); err == nil && ok {
+		if time.Since(rec.SentAt) < time.Minute {
+			writeError(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
+			return
 		}
 	}
 	code, err := GenerateRegCode(r.Context(), h.Store, email)
@@ -193,7 +217,11 @@ func (h *AuthHandler) registerSendCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := fmt.Sprintf("你的 RelayWatch 注册验证码是：%s\n\n10 分钟内有效。如非本人操作请忽略本邮件。", code)
-	if err := SendSystemMail(r.Context(), h.Store, email, "RelayWatch 注册验证码", body); err != nil {
+	if h.Mail == nil {
+		writeError(w, http.StatusServiceUnavailable, "全局邮件未配置")
+		return
+	}
+	if err := h.Mail.SendSystemMail(r.Context(), email, "RelayWatch 注册验证码", body); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "邮件发送失败："+err.Error())
 		return
 	}

@@ -18,6 +18,10 @@ type Worker struct {
 	Store     store.Store
 	Notifiers *notifier.Registry
 	Interval  time.Duration // 轮询间隔，默认 2s
+	// 重试策略（来自 notifications.retry 配置；0 值回退默认：5 次 / 2s 起 / 10min 封顶）
+	MaxAttempts int
+	BaseDelay   time.Duration
+	MaxDelay    time.Duration
 	// ResendLatest 前端手动重发时调用；true 表示重发时版本号取发送时刻 latest_version
 	OnDelivery func(status store.DeliveryStatus)
 
@@ -288,6 +292,9 @@ func (w *Worker) buildCompareMessage(ctx context.Context, m *store.Monitor, ch *
 			SourceType: m.SourceType,
 			Tags:       m.Tags,
 		},
+		Change: notifier.ChangeInfo{
+			DetectedAt: time.Now(),
+		},
 		Compare: notifier.CompareInfo{
 			RefMonitorName:  ref.Name,
 			RefVersion:      ref.LatestVersion,
@@ -344,17 +351,40 @@ func (w *Worker) interval() time.Duration {
 	return 2 * time.Second
 }
 
-func (w *Worker) maxAttempts() int { return 5 }
+func (w *Worker) maxAttempts() int {
+	if w.MaxAttempts > 0 {
+		return w.MaxAttempts
+	}
+	return 5
+}
 
+// backoff 指数退避：base * 2^(attempts-1)，封顶 max。
 func (w *Worker) backoff(attempts int) time.Duration {
-	delay := 2 * time.Second
+	delay := w.baseDelay()
 	for i := 1; i < attempts; i++ {
 		delay *= 2
-		if delay > 10*time.Minute {
-			return 10 * time.Minute
+		if delay >= w.maxDelay() {
+			return w.maxDelay()
 		}
 	}
+	if delay > w.maxDelay() {
+		return w.maxDelay()
+	}
 	return delay
+}
+
+func (w *Worker) baseDelay() time.Duration {
+	if w.BaseDelay > 0 {
+		return w.BaseDelay
+	}
+	return 2 * time.Second
+}
+
+func (w *Worker) maxDelay() time.Duration {
+	if w.MaxDelay > 0 {
+		return w.MaxDelay
+	}
+	return 10 * time.Minute
 }
 
 func (w *Worker) emit(status store.DeliveryStatus) {

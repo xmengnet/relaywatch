@@ -69,6 +69,8 @@ type Store interface {
 	CreateMonitor(ctx context.Context, m *Monitor) error
 	GetMonitor(ctx context.Context, id int64) (*Monitor, error)
 	ListMonitors(ctx context.Context, f MonitorFilter) ([]*Monitor, int, error)
+	// CountMonitorStates 仪表盘计数，按 ownerID 过滤（0 = 全量）。
+	CountMonitorStates(ctx context.Context, ownerID int64) (MonitorCounts, error)
 	ListEnabledMonitors(ctx context.Context) ([]*Monitor, error)
 	UpdateMonitor(ctx context.Context, m *Monitor) error
 	DeleteMonitor(ctx context.Context, id int64) error
@@ -108,13 +110,19 @@ type Store interface {
 	UpdateDelivery(ctx context.Context, d *Delivery) error
 	GetDelivery(ctx context.Context, id int64) (*Delivery, error)
 	DueDeliveries(ctx context.Context, now time.Time, limit int) ([]*Delivery, error)
-	ListDeliveries(ctx context.Context, monitorID, channelID int64, status DeliveryStatus, page, perPage int) ([]*Delivery, int, error)
+	ListDeliveries(ctx context.Context, monitorID, channelID int64, status DeliveryStatus, ownerID int64, page, perPage int) ([]*Delivery, int, error)
 	// CancelOpenDeliveries 作废某监控当前未确认变更的待投递记录（ack/停用/重发用）。
 	CancelOpenDeliveries(ctx context.Context, monitorID int64, reason string) (int64, error)
 
 	// 系统设置
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
+
+	// 注册邮箱验证码
+	PutRegistrationCode(ctx context.Context, email, code string, expiresAt, sentAt time.Time) error
+	SweepRegistrationCodes(ctx context.Context) error
+	GetRegistrationCode(ctx context.Context, email string) (*RegistrationCode, bool, error)
+	ConsumeRegistrationCode(ctx context.Context, email, code string, now time.Time) (bool, error)
 
 	// 审计
 	AddAudit(ctx context.Context, a *AuditEntry) error

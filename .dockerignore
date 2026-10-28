@@ -1,0 +1,15 @@
+.git
+.gitignore
+data
+config.yaml
+config.*.yaml
+!config.example.yaml
+relaywatch
+*.db
+*.db-wal
+*.db-shm
+web/node_modules
+web/dist
+web/coverage
+docs
+.tmp-*
