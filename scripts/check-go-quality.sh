@@ -110,27 +110,34 @@ fi
 
 # deadcode 带 -test：仅被测试引用的辅助方法（如 Freeze/ClientCount）不算死代码，
 # 只拦截从 main 与测试都不可达的真死代码。
-echo "Running deadcode..."
-set +e
-go tool deadcode -test ./... \
-  > "$work_dir/deadcode.output" \
-  2> "$work_dir/deadcode.error"
-deadcode_status=$?
-set -e
+# 该步需要整程序加载语法与类型信息，冷缓存实测峰值约 1.7GB；下面用 GOGC/GOMEMLIMIT 压到约 1.2GB。
+# 内存受限的 CI runner 若仍被 OOM 杀掉（日志为 "signal: killed"），可设 RW_SKIP_DEADCODE=1 跳过本步
+# （go vet 与 staticcheck 的 U1000 仍会执行）；给 runner 加内存到 2GB+ 后可去掉该开关。
+if [[ "${RW_SKIP_DEADCODE:-0}" == "1" ]]; then
+  echo "deadcode 已跳过（RW_SKIP_DEADCODE=1）"
+else
+  echo "Running deadcode..."
+  set +e
+  GOGC=50 GOMEMLIMIT=800MiB go tool deadcode -test ./... \
+    > "$work_dir/deadcode.output" \
+    2> "$work_dir/deadcode.error"
+  deadcode_status=$?
+  set -e
 
-if [[ -s "$work_dir/deadcode.error" ]]; then
-  sed '/^go: downloading /d' "$work_dir/deadcode.error" > "$work_dir/deadcode.error.filtered"
-  if [[ -s "$work_dir/deadcode.error.filtered" ]]; then
-    echo "deadcode failed:" >&2
-    cat "$work_dir/deadcode.error.filtered" >&2
+  if [[ -s "$work_dir/deadcode.error" ]]; then
+    sed '/^go: downloading /d' "$work_dir/deadcode.error" > "$work_dir/deadcode.error.filtered"
+    if [[ -s "$work_dir/deadcode.error.filtered" ]]; then
+      echo "deadcode failed:" >&2
+      cat "$work_dir/deadcode.error.filtered" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ $deadcode_status -ne 0 || -s "$work_dir/deadcode.output" ]]; then
+    echo "Dead code detected or deadcode failed:" >&2
+    cat "$work_dir/deadcode.output" >&2
     exit 1
   fi
-fi
-
-if [[ $deadcode_status -ne 0 || -s "$work_dir/deadcode.output" ]]; then
-  echo "Dead code detected or deadcode failed:" >&2
-  cat "$work_dir/deadcode.output" >&2
-  exit 1
 fi
 
 echo "Go quality checks passed."

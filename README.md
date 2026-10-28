@@ -89,10 +89,12 @@ CI 基于 Gitea Actions（`.gitea/workflows/`）：
   - Go 质量门禁（`scripts/check-go-quality.sh`）：gofmt、禁止生产代码使用 `interface{}`、`go vet`、`staticcheck`（带 `.lint-baseline/` 基线棘轮，只拦截新增告警）、`deadcode -test`（测试引用的辅助方法不算死代码）
   - `go test -race` 带覆盖率
   - `govulncheck` 依赖漏洞扫描
-  - `go build -tags dev` 编译验证（含嵌入前端的完整构建由 release 与 Dockerfile 覆盖）
+  - 编译验证（质量 job 不构建前端，放一个占位 `web/dist` 供 `go:embed` 解析，走真实嵌入路径；正式产物由 release.yml 构建）
   - 前端 `pnpm install --frozen-lockfile` + `pnpm test` + `pnpm build`（pnpm 版本由 `web/package.json` 的 `packageManager` 固定）
   - PR 提交信息校验（`type: subject` / `type(scope): subject` 规范，见 `scripts/check-commit-messages.sh`）
 - **release.yml** — 打 `v*` tag 时构建 Linux amd64 / arm64 二进制与 Arch Linux 包并创建 Release；版本号经 `-X main.release=<tag>` 注入（`relaywatch -version` 可查）
+
+内存受限的 runner 上，deadcode 与 `-race` 测试可能被内核 OOM 杀掉（日志 `signal: killed`）：两者已用 GOGC/GOMEMLIMIT 压低峰值（实测 deadcode 约 1.2GB、race 测试约 1.0GB）；仍被杀时可给 check.yml 对应步骤设 `RW_SKIP_DEADCODE: "1"` 跳过 deadcode（建议优先把 runner 内存加到 2GB+）。
 
 本地开发可运行与 CI 相同的门禁：
 

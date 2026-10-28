@@ -47,11 +47,18 @@ jobs:
           mkdir -p web/dist
           echo '<!doctype html><title>relaywatch embed stub</title>' > web/dist/index.html
 
+      # deadcode 步内存占用大（冷缓存实测峰值 1.2–1.7GB）；若 runner 内存不足被 OOM 杀掉
+      # （日志出现 "signal: killed"），给本步加 env: RW_SKIP_DEADCODE: "1" 即可跳过该检查
+      # （go vet 与 staticcheck 不受影响）；建议直接把 runner 内存提到 2GB+。
       - name: Run quality gates
         run: ./scripts/check-go-quality.sh
 
+      # -race 测试同样吃内存（实测约 1.0GB）：限制包级并行 + GOGC/GOMEMLIMIT 压峰值
       - name: Run tests
-        run: go test -race -coverprofile=coverage.txt -covermode=atomic ./...
+        env:
+          GOGC: "50"
+          GOMEMLIMIT: "800MiB"
+        run: go test -race -p 2 -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Check for vulnerabilities
         run: go tool govulncheck ./...
