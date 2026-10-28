@@ -29,7 +29,9 @@ jobs:
 
       # 同 check.yml：pnpm 装进 node 自身 bin 目录，规避 Forgejo runner 的 PATH 传递问题
       - name: Setup pnpm
-        run: npm install -g pnpm@12.15.0
+        run: |
+          npm install -g pnpm@12.15.0
+          pnpm --version
 
       - name: Install system dependencies
         run: |

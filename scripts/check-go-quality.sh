@@ -10,6 +10,14 @@ trap 'rm -rf "$work_dir"' EXIT
 
 cd "$repo_dir"
 
+# web 包用 //go:embed all:dist 嵌入前端产物，embed 要求该目录存在且有文件；
+# 未构建过前端时整个门禁无法编译 web 包，这里给出明确指引（CI 中由工作流预先放占位文件）。
+if [[ -z "$(ls -A web/dist 2>/dev/null)" ]]; then
+  echo "web/dist 不存在或为空：go vet/staticcheck/deadcode 需要编译 web 包（//go:embed all:dist）。" >&2
+  echo "请先构建前端：make web（或 cd web && pnpm install --frozen-lockfile && pnpm build）。" >&2
+  exit 1
+fi
+
 echo "Checking gofmt..."
 find . -type f -name '*.go' \
   -not -path './web/node_modules/*' \

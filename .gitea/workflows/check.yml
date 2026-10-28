@@ -39,6 +39,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # web 包用 //go:embed all:dist：embed 在编译期要求该目录存在且有文件。
+      # 质量 job 不构建前端，这里放一个占位文件让所有 go 命令能编译 web 包；
+      # 仅用于编译校验，不会进入任何发布产物（发布走 release.yml 的真实构建）。
+      - name: Stub web/dist for go:embed
+        run: |
+          mkdir -p web/dist
+          echo '<!doctype html><title>relaywatch embed stub</title>' > web/dist/index.html
+
       - name: Run quality gates
         run: ./scripts/check-go-quality.sh
 
@@ -48,10 +56,9 @@ jobs:
       - name: Check for vulnerabilities
         run: go tool govulncheck ./...
 
-      # -tags dev 跳过 go:embed，无需先构建前端即可验证主程序编译；
-      # 完整构建（含嵌入前端）由 frontend job 与 release.yml 覆盖
+      # 占位 dist 已就绪，走真实 go:embed 路径编译（带 -tags dev 会跳过嵌入，故不再使用）
       - name: Verify build
-        run: go build -tags dev -trimpath -ldflags="-s -w" -o /tmp/relaywatch-build-check ./cmd/relaywatch
+        run: go build -trimpath -ldflags="-s -w" -o /tmp/relaywatch-build-check ./cmd/relaywatch
 
   frontend:
     name: Frontend build
@@ -70,7 +77,9 @@ jobs:
       # 都会报 "Unable to locate executable file: pnpm"。
       # 改为装进 node 自身的 bin 目录（npm 所在目录），后续步骤必然可见。
       - name: Set up pnpm
-        run: npm install -g pnpm@12.15.0
+        run: |
+          npm install -g pnpm@12.15.0
+          pnpm --version
 
       - name: Install dependencies
         working-directory: web
