@@ -42,8 +42,8 @@ package() {
     # 二进制
     install -Dm755 relaywatch "${pkgdir}/usr/bin/relaywatch"
 
-    # 配置（backup：升级时保留用户修改）
-    install -Dm644 packaging/arch/config.yaml "${pkgdir}/etc/relaywatch/config.yaml"
+    # 配置（示例配置随包分发，用户自行填写；backup：升级时保留用户修改）
+    install -Dm644 config.example.yaml "${pkgdir}/etc/relaywatch/config.yaml"
     install -Dm600 packaging/arch/env "${pkgdir}/etc/relaywatch/env"
 
     # systemd

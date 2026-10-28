@@ -1,11 +1,13 @@
 server:
-  addr: ":3721"
+  addr: ":8080"
   base_url: "http://localhost:8080"
   # 部署在反向代理之后时设为 true，才会采信 X-Forwarded-For / X-Real-IP；
   # 直连部署保持 false，防止客户端伪造来源 IP 绕过登录限流。
   trust_proxy: false
 
 database:
+  # 相对路径按服务的工作目录解析：Arch 包/systemd 部署下为
+  # /var/lib/relaywatch/data/relaywatch.db（目录不存在会自动创建）
   path: "./data/relaywatch.db"
 
 security:

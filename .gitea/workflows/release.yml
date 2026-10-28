@@ -72,7 +72,8 @@ jobs:
           mkdir -p "${PKGROOT}/usr/share/doc/relaywatch"
 
           cp relaywatch-linux-amd64 "${PKGROOT}/usr/bin/relaywatch"
-          cp packaging/arch/config.yaml "${PKGROOT}/etc/relaywatch/config.yaml"
+          # 打包仓库中的示例配置为 /etc/relaywatch/config.yaml（.PKGINFO 标了 backup，升级不覆盖用户修改）
+          cp config.example.yaml "${PKGROOT}/etc/relaywatch/config.yaml"
           cp packaging/arch/env "${PKGROOT}/etc/relaywatch/env"
           chmod 600 "${PKGROOT}/etc/relaywatch/env"
           cp packaging/arch/relaywatch.service "${PKGROOT}/usr/lib/systemd/system/relaywatch.service"

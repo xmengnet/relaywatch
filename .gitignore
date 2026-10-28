@@ -2,8 +2,6 @@
 config.yaml
 config.*.yaml
 !config.example.yaml
-# 例外：Arch 包的默认配置（secret_key 为空占位，发布流水线要随包分发，须入库）
-!packaging/arch/config.yaml
 .env
 .env.local
 .env.*.local
