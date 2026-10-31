@@ -167,19 +167,9 @@ func (w *Worker) processOne(ctx context.Context, d *store.Delivery) {
 		d.Status = store.DeliverySent
 		d.SentAt = &now
 		d.LastError = ""
-		// 投递成功：更新监控的 last_notified_at（静默期基准）
-		m.LastNotifiedAt = &now
-		if err := w.Store.UpdateMonitorCheckResult(ctx, m.ID, store.CheckResult{
-			State:               m.State,
-			CurrentVersion:      m.CurrentVersion,
-			LatestVersion:       m.LatestVersion,
-			LastCheckedAt:       nowOr(m.LastCheckedAt),
-			LastSuccessAt:       m.LastSuccessAt,
-			LastChangeAt:        m.LastChangeAt,
-			LastError:           m.LastError,
-			ConsecutiveFailures: m.ConsecutiveFailures,
-			LastNotifiedAt:      &now,
-		}); err != nil {
+		// 投递成功：只更新 last_notified_at（静默期基准）。
+		// 不整行回写检查状态——并发检查刚落库的结果会被旧快照覆盖。
+		if err := w.Store.TouchMonitorNotified(ctx, m.ID, now); err != nil {
 			slog.Error("touch last_notified_at", "err", err)
 		}
 	} else {

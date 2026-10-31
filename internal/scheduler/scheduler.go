@@ -3,9 +3,12 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"hash/fnv"
 	"log/slog"
 	"math"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -185,7 +188,8 @@ func (s *Scheduler) run(ctx context.Context, m *store.Monitor) {
 	s.sem <- struct{}{}
 
 	// per-host 限速：令牌不足则等待最多 3 轮，仍不足则本轮跳过（不算检查）
-	if host := s.hostOf(m); host != "" && s.Hosts != nil {
+	host := s.hostOf(m)
+	if host != "" && s.Hosts != nil {
 		if !s.waitAllow(ctx, host) {
 			slog.Debug("host limited, skip this round", "monitor", m.ID, "host", host)
 			return
@@ -193,6 +197,11 @@ func (s *Scheduler) run(ctx context.Context, m *store.Monitor) {
 	}
 	out := s.Checker.Check(ctx, m)
 	slog.Debug("checked", "monitor", m.ID, "ok", out.OK, "state", out.State, "ms", out.DurationMS)
+	// 源返回 429：冻结该 host 一小段冷却时间，避免持续撞限流
+	// （源错误串里的状态码目前不带 Retry-After，固定 60s 冷却）
+	if !out.OK && host != "" && s.Hosts != nil && strings.Contains(out.Error, "429") {
+		s.Hosts.Freeze(host, time.Now().Add(60*time.Second))
+	}
 }
 
 func (s *Scheduler) waitAllow(ctx context.Context, host string) bool {
@@ -209,7 +218,9 @@ func (s *Scheduler) waitAllow(ctx context.Context, host string) bool {
 	return false
 }
 
-// hostOf 从源配置里提取目标主机名（http_json/http_regex 有 url 字段）。
+// hostOf 从源配置里提取目标主机名：内置源映射到其 API 域名；
+// 其余类型（http_json/http_regex 等带 url 字段的源——最需要 per-host 限流的）
+// 从配置解析真实主机，否则这些源完全不受限速保护。
 func (s *Scheduler) hostOf(m *store.Monitor) string {
 	switch m.SourceType {
 	case "github_release", "github_tag":
@@ -218,9 +229,16 @@ func (s *Scheduler) hostOf(m *store.Monitor) string {
 		return "aur.archlinux.org"
 	case "arch_official":
 		return "archlinux.org"
-	default:
-		return ""
 	}
+	var cfg struct {
+		URL string `json:"url"`
+	}
+	if json.Unmarshal([]byte(m.SourceConfig), &cfg) == nil && cfg.URL != "" {
+		if u, err := url.Parse(cfg.URL); err == nil && u.Host != "" {
+			return u.Host
+		}
+	}
+	return ""
 }
 
 func (s *Scheduler) markRunning(id int64) bool {

@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,9 +28,23 @@ func (o Options) client() *http.Client {
 	return &http.Client{Timeout: t}
 }
 
+// defaultUserAgent 包级默认 UA：sources.user_agent 配置经 SetDefaultUserAgent
+// 注入（Checker.UserAgent 无参数通道，各源内部以零值 Options 调 fetch*）。
+var defaultUserAgent atomic.Value // string
+
+// SetDefaultUserAgent 设置包级默认 User-Agent（进程启动时调用一次）。
+func SetDefaultUserAgent(ua string) {
+	if ua != "" {
+		defaultUserAgent.Store(ua)
+	}
+}
+
 func (o Options) ua() string {
 	if o.UserAgent != "" {
 		return o.UserAgent
+	}
+	if v, ok := defaultUserAgent.Load().(string); ok && v != "" {
+		return v
 	}
 	return "RelayWatch/0.1"
 }

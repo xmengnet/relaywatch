@@ -83,20 +83,23 @@ func main() {
 
 	// 源注册表（新增源类型在 internal/source/defaults.go 维护）
 	registry := source.NewDefaultRegistry()
+	// sources.user_agent 配置此前未接线：Checker.UserAgent 无参数通道，
+	// 各源内部以零值 Options 发请求，这里注入包级默认 UA
+	source.SetDefaultUserAgent(cfg.Sources.UserAgent)
 
 	checker := &check.Checker{
 		Registry:  registry,
 		Store:     st,
 		Threshold: 3,
 		Timeout:   cfg.Sources.HTTPTimeout,
-		UserAgent: cfg.Sources.UserAgent,
 	}
 	sched := &scheduler.Scheduler{
-		Store:   st,
-		Checker: checker,
-		Tick:    cfg.Scheduler.Tick,
-		MaxConc: cfg.Scheduler.MaxConc,
-		Hosts:   scheduler.NewHostLimiter(cfg.Scheduler.HostRateLimit.DefaultPerMinute, cfg.Scheduler.HostRateLimit.Overrides),
+		Store:       st,
+		Checker:     checker,
+		Tick:        cfg.Scheduler.Tick,
+		MaxConc:     cfg.Scheduler.MaxConc,
+		Hosts:       scheduler.NewHostLimiter(cfg.Scheduler.HostRateLimit.DefaultPerMinute, cfg.Scheduler.HostRateLimit.Overrides),
+		MinInterval: cfg.Scheduler.MinInterval, // 配置此前未接线，YAML 里改 min_interval 一直无效
 	}
 
 	// 通知渠道注册表（新增渠道在 internal/notifier/defaults.go 维护）
@@ -188,6 +191,27 @@ func main() {
 	sched.Start(ctx)
 	worker.Start(ctx)
 	slog.Info("调度器已启动", "tick", cfg.Scheduler.Tick, "max_conc", cfg.Scheduler.MaxConc)
+
+	// 过期会话/注册验证码定期清理：登录与注册每次都插行，不清理则表无限增长
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if n, err := st.DeleteExpiredSessions(context.Background()); err != nil {
+					slog.Warn("清理过期会话失败", "err", err)
+				} else if n > 0 {
+					slog.Info("已清理过期会话", "count", n)
+				}
+				if err := st.SweepRegistrationCodes(context.Background()); err != nil {
+					slog.Warn("清理过期注册验证码失败", "err", err)
+				}
+			}
+		}
+	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

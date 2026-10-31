@@ -543,6 +543,16 @@ func (n *SMTPNotifier) Validate(cfg map[string]any) error {
 	return required(cfg, "host", "port", "username", "password", "from")
 }
 
+// sanitizeHeader 把邮件头值中的 CR/LF 替换为空格，阻断头部注入。
+func sanitizeHeader(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
 func (n *SMTPNotifier) Send(ctx context.Context, cfg map[string]any, msg *Message) error {
 	from := cfgString(cfg, "from")
 	to := cfgString(cfg, "to")
@@ -559,9 +569,9 @@ func (n *SMTPNotifier) Send(ctx context.Context, cfg map[string]any, msg *Messag
 		recipients[i] = strings.TrimSpace(recipients[i])
 	}
 	content := strings.Join([]string{
-		"From: " + from,
-		"To: " + strings.Join(recipients, ", "),
-		"Subject: " + msg.Title,
+		"From: " + sanitizeHeader(from),
+		"To: " + sanitizeHeader(strings.Join(recipients, ", ")),
+		"Subject: " + sanitizeHeader(msg.Title), // 标题来自模板渲染（含用户可控的监控名），换行可注入头/Bcc
 		"MIME-Version: 1.0",
 		"Content-Type: text/plain; charset=utf-8",
 		"",

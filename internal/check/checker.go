@@ -17,7 +17,6 @@ type Checker struct {
 	Store     store.Store
 	Threshold int           // 连续失败多少次进入 error
 	Timeout   time.Duration // 单源请求超时
-	UserAgent string
 	// Notifier 可选：状态变化时的钩子（M3 接投递）。
 	OnEvent func(Event)
 	// OnChange 可选：检测到需要投递的版本变更时回调（notify.Dispatcher.OnChange）。
