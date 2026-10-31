@@ -444,7 +444,7 @@ export default {
     mailPasswordSet: 'Set; leave empty to keep it',
     mailFrom: 'From address',
     mailTest: 'Send test email',
-    mailTestSent: 'Test email sent',
+    mailTestSentTo: 'Test email sent to {to}; check your inbox (and spam folder)',
     mailSendFailed: 'Send failed',
     mailSaved: 'Email settings saved',
     oidc: 'OIDC sign-in',

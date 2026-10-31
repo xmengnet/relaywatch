@@ -167,7 +167,7 @@ async function testMail() {
   sendingTestMail.value = true
   try {
     const r = await sendTestMail()
-    if (r.ok) toast(t('site.mailTestSent'))
+    if (r.ok) toast(t('site.mailTestSentTo', { to: r.to ?? '' }))
     else toast(r.error || t('site.mailSendFailed'), 'error')
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), 'error')

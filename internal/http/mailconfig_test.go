@@ -213,3 +213,45 @@ func TestSendSystemMailRawSmoke(t *testing.T) {
 		t.Skip("unexpected success on closed port")
 	}
 }
+
+// 测试邮件发给当前用户资料里的邮箱；未维护邮箱明确报错。
+// 旧行为发给 From（noreply 发件账号），测试"成功"但收件人永远看不到。
+func TestMailConfigTestTargetsUserProfileEmail(t *testing.T) {
+	env := newMultiUserEnv(t)
+	env.mustUser(t, "admin-ac", "admin", "password123")
+	adminC, adminCSRF := env.loginAs(t, "admin-ac", "password123")
+
+	// 保存配置（指向不可达地址：发送必然失败，但收件人校验逻辑不受影响）
+	rec := env.do(t, "PUT", "/api/v1/mail-config", adminC, adminCSRF, map[string]any{
+		"host": "127.0.0.1", "port": "1", "from": "rw@example.com", "encryption": "none",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT mail-config = %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 未维护邮箱 → 400 明确报错
+	rec = env.do(t, "POST", "/api/v1/mail-config/test", adminC, adminCSRF, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("test without email = %d %s, want 400", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "邮箱") {
+		t.Errorf("error should mention 邮箱, got %s", rec.Body.String())
+	}
+
+	// 维护邮箱后 → 不再报"未维护"；发送对不可达地址失败，返回 ok:false
+	rec = env.do(t, "PATCH", "/api/v1/profile", adminC, adminCSRF, map[string]any{"email": "admin@x.io"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH profile = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = env.do(t, "POST", "/api/v1/mail-config/test", adminC, adminCSRF, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test with email = %d %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "未维护") {
+		t.Errorf("should no longer complain about missing email, got %s", body)
+	}
+	if !strings.Contains(body, `"ok":false`) {
+		t.Errorf("send to unreachable SMTP should return ok:false, got %s", body)
+	}
+}

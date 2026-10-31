@@ -18,5 +18,5 @@ export function putMailConfig(p: Partial<MailConfig>) {
 }
 
 export function sendTestMail() {
-  return apiFetch<{ ok: boolean; error?: string }>('/mail-config/test', { method: 'POST' })
+  return apiFetch<{ ok: boolean; to?: string; error?: string }>('/mail-config/test', { method: 'POST' })
 }

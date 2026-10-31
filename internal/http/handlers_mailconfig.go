@@ -140,18 +140,30 @@ func (h *MailConfigHandler) put(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// test 用当前保存的配置发一封测试邮件到发件人自身。
+// test 用当前保存的配置发一封测试邮件到当前用户资料里的邮箱。
+// 未维护邮箱时报错：发给 From（noreply 发件账号）的测试对使用者毫无验证价值。
 func (h *MailConfigHandler) test(w http.ResponseWriter, r *http.Request) {
+	u := authUser(r)
+	got, err := h.St.UserByID(r.Context(), u.ID)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	to := strings.TrimSpace(got.Email)
+	if to == "" {
+		writeError(w, http.StatusBadRequest, "当前账户未维护邮箱，请先在「个人资料」中填写")
+		return
+	}
 	cfg, pw, err := h.load(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "尚未配置邮件")
 		return
 	}
-	if err := sendSystemMail(r.Context(), cfg, pw, cfg.From, "RelayWatch 测试邮件", "全局邮件配置正确。这是一封来自 RelayWatch 的测试邮件。"); err != nil {
+	if err := sendSystemMail(r.Context(), cfg, pw, to, "RelayWatch 测试邮件", "全局邮件配置正确。这是一封来自 RelayWatch 的测试邮件。"); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "to": to})
 }
 
 // ---------- 系统邮件发送与验证码（供注册流程使用） ----------

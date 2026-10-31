@@ -444,7 +444,7 @@ export default {
     mailPasswordSet: '已设置，留空不修改',
     mailFrom: '发件人地址',
     mailTest: '发送测试邮件',
-    mailTestSent: '测试邮件已发送',
+    mailTestSentTo: '测试邮件已发送至 {to}，请查收（注意垃圾箱）',
     mailSendFailed: '发送失败',
     mailSaved: '邮件配置已保存',
     oidc: 'OIDC 登录',
