@@ -14,33 +14,32 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.15.0
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-
-      # 同 check.yml：pnpm 装进 node 自身 bin 目录，规避 Forgejo runner 的 PATH 传递问题
-      - name: Setup pnpm
-        run: |
-          npm install -g pnpm@12.15.0
-          pnpm --version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Install system dependencies
         run: |
-          apt-get update
-          apt-get install -y zstd
+          sudo apt-get update
+          sudo apt-get install -y zstd
 
       - name: Build frontend (go:embed 打包进二进制)
+        working-directory: web
         run: |
-          cd web
           pnpm install --frozen-lockfile
           pnpm build
 
@@ -101,26 +100,15 @@ jobs:
           cd ..
           rm -rf "${PKGROOT}"
 
-      - name: Upload Arch Package
-        uses: ChristopherHX/gitea-upload-artifact@v4
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: relaywatch-arch-x86_64
-          path: |
-            relaywatch-*-x86_64.pkg.tar.zst
-
-      - name: Upload Linux amd64
-        uses: ChristopherHX/gitea-upload-artifact@v4
-        with:
-          name: relaywatch-linux-amd64
+          name: dist
           path: |
             relaywatch-linux-amd64
-
-      - name: Upload Linux arm64
-        uses: ChristopherHX/gitea-upload-artifact@v4
-        with:
-          name: relaywatch-linux-arm64
-          path: |
             relaywatch-linux-arm64
+            relaywatch-*-1-x86_64.pkg.tar.zst
+          if-no-files-found: error
 
   create-release:
     needs: build
@@ -129,10 +117,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download All Artifacts
-        uses: ChristopherHX/gitea-download-artifact@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          name: dist
+          path: dist
 
       # ${VERSION#v} 是 bash 语法，只在 run 的 shell 里求值；
       # body 直接传给 release action，必须先用表达式算好再插入
@@ -141,10 +130,10 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
-        uses: https://gitea.com/actions/gitea-release-action@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag: ${{ github.ref_name }}
-          title: RelayWatch ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          name: RelayWatch ${{ github.ref_name }}
           body: |
             ## RelayWatch ${{ github.ref_name }}
 
@@ -174,5 +163,7 @@ jobs:
 
             完整部署说明（Docker / systemd / 反向代理 / 备份）见仓库 `docs/deploy.md`。
           files: |
-            artifacts/**/*
-            !artifacts/**/.*
+            dist/relaywatch-linux-amd64
+            dist/relaywatch-linux-arm64
+            dist/relaywatch-*-1-x86_64.pkg.tar.zst
+          fail_on_unmatched_files: true

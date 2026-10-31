@@ -37,7 +37,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
 
       # web 包用 //go:embed all:dist：embed 在编译期要求该目录存在且有文件。
       # 质量 job 不构建前端，这里放一个占位文件让所有 go 命令能编译 web 包；
@@ -47,23 +46,16 @@ jobs:
           mkdir -p web/dist
           echo '<!doctype html><title>relaywatch embed stub</title>' > web/dist/index.html
 
-      # deadcode 步内存占用大（冷缓存实测峰值 1.2–1.7GB）；若 runner 内存不足被 OOM 杀掉
-      # （日志出现 "signal: killed"），给本步加 env: RW_SKIP_DEADCODE: "1" 即可跳过该检查
-      # （go vet 与 staticcheck 不受影响）；建议直接把 runner 内存提到 2GB+。
       - name: Run quality gates
         run: ./scripts/check-go-quality.sh
 
-      # -race 测试同样吃内存（实测约 1.0GB）：限制包级并行 + GOGC/GOMEMLIMIT 压峰值
       - name: Run tests
-        env:
-          GOGC: "50"
-          GOMEMLIMIT: "800MiB"
-        run: go test -race -p 2 -coverprofile=coverage.txt -covermode=atomic ./...
+        run: go test -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Check for vulnerabilities
         run: go tool govulncheck ./...
 
-      # 占位 dist 已就绪，走真实 go:embed 路径编译（带 -tags dev 会跳过嵌入，故不再使用）
+      # 占位 dist 已就绪，走真实 go:embed 路径编译
       - name: Verify build
         run: go build -trimpath -ldflags="-s -w" -o /tmp/relaywatch-build-check ./cmd/relaywatch
 
@@ -74,19 +66,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 版本与 web/package.json 的 packageManager 字段保持一致
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.15.0
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-
-      # 不用 pnpm/action-setup：Forgejo runner 对 action 改 PATH 的传递不可靠，
-      # setup-node 的 cache: pnpm（运行期要调用 pnpm store path）与后续 run 步骤
-      # 都会报 "Unable to locate executable file: pnpm"。
-      # 改为装进 node 自身的 bin 目录（npm 所在目录），后续步骤必然可见。
-      - name: Set up pnpm
-        run: |
-          npm install -g pnpm@12.15.0
-          pnpm --version
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Install dependencies
         working-directory: web
