@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
@@ -90,6 +91,42 @@ func TestRegisterSendCodeRateLimit(t *testing.T) {
 	}
 	if code := send(); code != http.StatusTooManyRequests {
 		t.Fatalf("second send = %d, want 429", code)
+	}
+}
+
+// 回归：/auth/register 曾无任何限流，6 位验证码可在线爆破。
+// 按 IP+邮箱限流：连续试错达到上限后 429。
+func TestRegisterRateLimit(t *testing.T) {
+	lim := auth.NewAttemptLimiter(2, time.Minute, time.Minute)
+	env := newMultiUserEnvWithLimiter(t, lim)
+	env.mustUser(t, "admin-rl2", "admin", "TestPassw0rd!")
+	cookie, csrf := env.loginAs(t, "admin-rl2", "TestPassw0rd!")
+	rec := env.do(t, "PUT", "/api/v1/settings", cookie, csrf, map[string]any{
+		"registration_enabled":       true,
+		"registration_require_email": true,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("enable registration = %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := GenerateRegCode(context.Background(), env.st, "brute@example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	attempt := func() int {
+		t.Helper()
+		rec := env.do(t, "POST", "/api/v1/auth/register", "", "", map[string]any{
+			"username": "brute", "password": "password123", "email": "brute@example.com", "email_code": "000000",
+		})
+		return rec.Code
+	}
+	if code := attempt(); code != http.StatusBadRequest {
+		t.Fatalf("first wrong code = %d, want 400", code)
+	}
+	if code := attempt(); code != http.StatusBadRequest {
+		t.Fatalf("second wrong code = %d, want 400", code)
+	}
+	if code := attempt(); code != http.StatusTooManyRequests {
+		t.Fatalf("third attempt = %d, want 429", code)
 	}
 }
 

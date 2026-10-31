@@ -2,8 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/subtle"
 	"net/http"
-	"strings"
 
 	"relaywatch/internal/store"
 )
@@ -131,7 +131,9 @@ func RequireCSRF(next http.Handler) http.Handler {
 		if tok == "" {
 			tok = r.PostFormValue("_csrf")
 		}
-		if tok == "" || !strings.EqualFold(tok, sess.CSRFToken) {
+		// 常量时间比较：CSRF token 为 base64url，EqualFold 的大小写折叠
+		// 会缩小有效空间且比较时长泄露前缀匹配长度
+		if tok == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(sess.CSRFToken)) != 1 {
 			http.Error(w, `{"message":"CSRF 校验失败"}`, http.StatusForbidden)
 			return
 		}

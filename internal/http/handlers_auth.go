@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -199,7 +200,8 @@ func (h *AuthHandler) registerSendCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := strings.TrimSpace(req.Email)
-	if email == "" || !strings.Contains(email, "@") {
+	// 收件人直拼 SMTP 信封与头部，CRLF 可注入；与 profile 邮箱校验同规则
+	if addr, err := mail.ParseAddress(email); err != nil || addr.Address != email {
 		writeError(w, http.StatusBadRequest, "邮箱格式不正确")
 		return
 	}
@@ -257,7 +259,15 @@ func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "注册需要邮箱")
 			return
 		}
+		// 验证码爆破第二道防线（第一道是 VerifyRegCode 的错误次数上限）：
+		// 按 IP+邮箱限流，避免同 IP 高频试错；不同邮箱互不影响
+		regKey := "register:" + clientIP(r) + "|" + strings.ToLower(strings.TrimSpace(req.Email))
+		if !h.Limiter.Allow(regKey) {
+			writeError(w, http.StatusTooManyRequests, "尝试过于频繁，请稍后再试")
+			return
+		}
 		if err := VerifyRegCode(r.Context(), h.Store, req.Email, req.EmailCode); err != nil {
+			h.Limiter.Hit(regKey)
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}

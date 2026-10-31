@@ -122,8 +122,51 @@ func TestOIDCProviderAdminListAndIssuerNormalize(t *testing.T) {
 	}
 }
 
-// ---------- OIDC 绑定流程（「个人资料」） ----------
+// 回归：provider 写接口曾漏挂 RequireAdmin，任何登录用户可增删改
+// （改 issuer 即可劫持全站 OIDC 登录/绑定流程）。
+func TestOIDCProviderWriteAdminOnly(t *testing.T) {
+	env := newMultiUserEnvWithOIDC(t)
+	env.mustUser(t, "admin-ac", "admin", "password123")
+	env.mustUser(t, "user1", "user", "password123")
+	adminC, adminCSRF := env.loginAs(t, "admin-ac", "password123")
+	uC, uCSRF := env.loginAs(t, "user1", "password123")
 
+	rec := env.do(t, "POST", "/api/v1/auth/providers", adminC, adminCSRF, map[string]any{
+		"name": "casdoor", "issuer": "https://door.example", "client_id": "cid", "client_secret": "sec",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("admin create provider = %d %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	idPath := "/api/v1/auth/providers/" + strconv.FormatInt(created.ID, 10)
+
+	for _, tc := range []struct {
+		method, path string
+		body         map[string]any
+	}{
+		{"POST", "/api/v1/auth/providers", map[string]any{"name": "evil", "issuer": "https://evil.example", "client_id": "c", "client_secret": "s"}},
+		{"PATCH", idPath, map[string]any{"name": "casdoor", "issuer": "https://evil.example", "client_id": "cid"}},
+		{"DELETE", idPath, nil},
+	} {
+		if rec := env.do(t, tc.method, tc.path, uC, uCSRF, tc.body); rec.Code != http.StatusForbidden {
+			t.Errorf("user %s %s = %d, want 403", tc.method, tc.path, rec.Code)
+		}
+		if rec := env.do(t, tc.method, tc.path, "", "", tc.body); rec.Code != http.StatusUnauthorized {
+			t.Errorf("anonymous %s %s = %d, want 401", tc.method, tc.path, rec.Code)
+		}
+	}
+	// admin 写操作不受影响
+	if rec := env.do(t, "DELETE", idPath, adminC, adminCSRF, nil); rec.Code != http.StatusNoContent {
+		t.Errorf("admin delete provider = %d, want 204", rec.Code)
+	}
+}
+
+// ---------- OIDC 绑定流程（「个人资料」） ----------
 // 假 IdP：只提供发现文档（BeginBind 仅需 discovery；换 token 发生在 CompleteBind，需真实 IdP，不在单测覆盖内）。
 // issuer 动态取 r.Host，保证与 go-oidc 的严格比对一致。
 func newFakeIdP(t *testing.T) *httptest.Server {
@@ -236,5 +279,72 @@ func TestOIDCUnbindRequiresPassword(t *testing.T) {
 	}
 	if rec := env.do(t, "DELETE", "/api/v1/profile/oidc", "pure-sess", "pure-csrf", nil); rec.Code != http.StatusBadRequest {
 		t.Fatalf("pure-oidc unbind = %d %s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+// 回归：纯 OIDC 账户曾被 changePassword 拒绝设置密码，
+// 「先在「安全」中设置密码再解绑」的前后端提示指向一条不存在的路径。
+// 现在无密码账户可设置密码（登录态+CSRF 即授权），随后可解绑。
+func TestOIDCAccountSetPasswordThenUnbind(t *testing.T) {
+	env := newMultiUserEnvWithOIDC(t)
+	pure := &store.User{Username: "pureoidc2", Role: "user", CreatedAt: time.Now()}
+	if err := env.st.CreateUser(context.Background(), pure); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.st.SetUserOIDC(context.Background(), pure.ID, "casdoor", "sub-pure2"); err != nil {
+		t.Fatal(err)
+	}
+	sess := &store.Session{ID: "pure-sess2", UserID: pure.ID, CSRFToken: "pure-csrf2", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
+	if err := env.st.CreateSession(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+
+	// 无旧密码直接设置 → 200
+	rec := env.do(t, "POST", "/api/v1/profile/password", "pure-sess2", "pure-csrf2", map[string]any{
+		"old_password": "", "new_password": "newpassword1",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set password = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+
+	// 已有密码后改密：旧密码错误 → 401
+	rec = env.do(t, "POST", "/api/v1/profile/password", "pure-sess2", "pure-csrf2", map[string]any{
+		"old_password": "wrong-old", "new_password": "newpassword2",
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("change with wrong old = %d, want 401", rec.Code)
+	}
+
+	// 解绑不再受阻
+	if rec := env.do(t, "DELETE", "/api/v1/profile/oidc", "pure-sess2", "pure-csrf2", nil); rec.Code != http.StatusOK {
+		t.Fatalf("unbind after set password = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+
+	// 新密码可登录
+	if rec := env.do(t, "POST", "/api/v1/auth/login", "", "", map[string]any{
+		"username": "pureoidc2", "password": "newpassword1",
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("login with set password = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// 绑定确认端点：登录+CSRF 组内，未知/他人 token 400。
+func TestBindConfirmEndpoints(t *testing.T) {
+	env := newMultiUserEnvWithOIDC(t)
+	env.mustUser(t, "u-bc", "user", "password123")
+	uC, uCSRF := env.loginAs(t, "u-bc", "password123")
+
+	if rec := env.do(t, "GET", "/api/v1/auth/bind/pending?token=nope", uC, "", nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("pending unknown token = %d, want 400", rec.Code)
+	}
+	if rec := env.do(t, "POST", "/api/v1/auth/bind/confirm", uC, uCSRF, map[string]any{"token": "nope"}); rec.Code != http.StatusBadRequest {
+		t.Errorf("confirm unknown token = %d, want 400", rec.Code)
+	}
+	// 未登录 → 401
+	if rec := env.do(t, "GET", "/api/v1/auth/bind/pending?token=nope", "", "", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous pending = %d, want 401", rec.Code)
+	}
+	if rec := env.do(t, "POST", "/api/v1/auth/bind/confirm", "", "", map[string]any{"token": "nope"}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous confirm = %d, want 401", rec.Code)
 	}
 }

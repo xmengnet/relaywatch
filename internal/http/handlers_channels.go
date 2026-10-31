@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"relaywatch/internal/notifier"
@@ -97,7 +98,7 @@ func (h *ChannelHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, _ := h.St.GetChannel(r.Context(), c.ID)
-	writeJSON(w, http.StatusCreated, toChannelResponse(out))
+	writeJSON(w, http.StatusCreated, h.view(out, authUser(r)))
 }
 
 func (h *ChannelHandler) validateType(p *channelPayload) error {
@@ -134,7 +135,7 @@ func (h *ChannelHandler) get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "渠道不存在") // 404 语义，防枚举
 		return
 	}
-	writeJSON(w, http.StatusOK, toChannelResponse(c))
+	writeJSON(w, http.StatusOK, h.view(c, authUser(r)))
 }
 
 func (h *ChannelHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -152,9 +153,71 @@ func (h *ChannelHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]*channelResponse, 0, len(channels))
 	for _, c := range channels {
-		out = append(out, toChannelResponse(c))
+		out = append(out, h.view(c, u))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+// view 渠道 API 视图：无修改权（非 owner 且非 admin）时掩掉 config 里的机密字段，
+// 共享渠道的 bot_token/密码等不下发给普通用户。
+func (h *ChannelHandler) view(c *store.Channel, u *store.User) *channelResponse {
+	resp := toChannelResponse(c)
+	if !canModifyChannel(u, c) {
+		resp.Config = h.maskedConfig(c.Type, c.Config)
+	}
+	return resp
+}
+
+// channelMask 非法/未知类型兜底用：与导出脱敏共用一套键名。
+var channelMask = "••••••"
+
+// maskedConfig 按 notifier 元数据把 Type=secret 的字段替换为掩码；
+// 元数据缺失时退回导出用的静态键名表。
+func (h *ChannelHandler) maskedConfig(cfgType, config string) string {
+	secretKeys := map[string]bool{}
+	if n, ok := h.Notifiers.Get(cfgType); ok {
+		if mp, isMeta := n.(notifier.MetaProvider); isMeta {
+			for _, f := range mp.Meta().Fields {
+				if f.Type == "secret" {
+					secretKeys[strings.ToLower(f.Key)] = true
+				}
+			}
+		}
+	}
+	if len(secretKeys) == 0 {
+		secretKeys = secretKeysByType(cfgType)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(config), &doc); err != nil {
+		return config
+	}
+	hit := false
+	for k, v := range doc {
+		if secretKeys[strings.ToLower(k)] {
+			if s, ok := v.(string); ok && s != "" {
+				doc[k] = channelMask
+				hit = true
+			}
+		}
+	}
+	if !hit {
+		return config
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return config
+	}
+	return string(out)
+}
+
+// secretKeysByType 静态兜底：notifier 元数据不可用时的脱敏键名（与导出一致）。
+func secretKeysByType(cfgType string) map[string]bool {
+	_ = cfgType
+	return map[string]bool{
+		"token": true, "secret": true, "bot_token": true, "password": true,
+		"webhook": true, "webhook_url": true, "url_secret": true, "key": true,
+		"sendkey": true, "app_token": true,
+	}
 }
 
 func (h *ChannelHandler) update(w http.ResponseWriter, r *http.Request) {
@@ -214,7 +277,7 @@ func (h *ChannelHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, _ := h.St.GetChannel(r.Context(), id)
-	writeJSON(w, http.StatusOK, toChannelResponse(out))
+	writeJSON(w, http.StatusOK, h.view(out, authUser(r)))
 }
 
 func (h *ChannelHandler) remove(w http.ResponseWriter, r *http.Request) {

@@ -130,13 +130,14 @@ func (h *CheckHandler) ack(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.St.CancelOpenDeliveries(r.Context(), id, "acknowledged by user"); err != nil {
 		slog.Error("cancel deliveries on ack", "err", err)
 	}
-	// ack 后监控回到 up_to_date，基线提升到 latest
-	m.State = store.StateUpToDate
-	m.CurrentVersion = m.LatestVersion
-	if err := h.St.UpdateMonitor(r.Context(), m); err != nil {
+	// ack 后监控回到 up_to_date，基线提升到 latest（定向更新，不整行覆盖检查状态）
+	upToDate := store.StateUpToDate
+	if err := h.St.SetMonitorBaseline(r.Context(), id, &upToDate, &m.LatestVersion); err != nil {
 		writeInternalError(w, err)
 		return
 	}
+	m.State = upToDate
+	m.CurrentVersion = m.LatestVersion
 	_ = h.St.AddAudit(r.Context(), &store.AuditEntry{
 		UserID: &uid, Action: "monitor.ack", Target: m.Name,
 	})

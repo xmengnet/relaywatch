@@ -206,6 +206,41 @@ func TestVerifyRegCodeExpiry(t *testing.T) {
 	}
 }
 
+// 回归：验证码曾有隔码无防爆破——6 位数字码可在线无限试错。
+// 现在错误达到上限即作废；未到上限时答对仍可消费。
+func TestVerifyRegCodeAttemptCap(t *testing.T) {
+	env := newMultiUserEnv(t)
+	ctx := context.Background()
+
+	// 4 次错误后答对 → 成功
+	code, err := GenerateRegCode(ctx, env.st, "ok@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if err := VerifyRegCode(ctx, env.st, "ok@example.com", "000000"); err == nil {
+			t.Fatalf("wrong code #%d should fail", i+1)
+		}
+	}
+	if err := VerifyRegCode(ctx, env.st, "ok@example.com", code); err != nil {
+		t.Fatalf("correct code after 4 wrong attempts should pass, got %v", err)
+	}
+
+	// 5 次错误 → 作废，答对也拒绝
+	code, err = GenerateRegCode(ctx, env.st, "dead@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if err := VerifyRegCode(ctx, env.st, "dead@example.com", "000000"); err == nil {
+			t.Fatalf("wrong code #%d should fail", i+1)
+		}
+	}
+	if err := VerifyRegCode(ctx, env.st, "dead@example.com", code); err == nil {
+		t.Fatal("code should be invalidated after max wrong attempts")
+	}
+}
+
 // SendSystemMailRaw 基础冒烟：非法地址返回错误而非 panic。
 func TestSendSystemMailRawSmoke(t *testing.T) {
 	err := notifier.SendSystemMailRaw(context.Background(), "127.0.0.1:1", "127.0.0.1", "none", nil, "a@x", []string{"b@x"}, []byte("hi"))

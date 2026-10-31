@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/mail"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -36,7 +38,7 @@ func (h *ProfileHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := map[string]any{
 		"user":          toUserResponse(got),
-		"oidc":          got.OIDCProvider != "", // OIDC-only 账户不可设密码
+		"oidc":          got.OIDCProvider != "", // 是否绑定了 OIDC 登录
 		"oidc_provider": got.OIDCProvider,       // 绑定的 IdP 名，未绑定为空
 		"has_password":  len(got.PasswordHash) > 0,
 		"has_ldap":      false,
@@ -84,7 +86,15 @@ func (h *ProfileHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Email != nil {
-		got.Email = *req.Email
+		e := strings.TrimSpace(*req.Email)
+		// 邮箱会进入 SMTP 收件人/头部，CRLF 可注入；留空 = 清除
+		if e != "" {
+			if addr, err := mail.ParseAddress(e); err != nil || addr.Address != e {
+				writeError(w, http.StatusBadRequest, "邮箱格式不正确")
+				return
+			}
+		}
+		got.Email = e
 	}
 	if req.DisplayName != nil {
 		got.DisplayName = *req.DisplayName
@@ -117,11 +127,10 @@ func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request) 
 		writeInternalError(w, err)
 		return
 	}
-	if got.OIDCProvider != "" && len(got.PasswordHash) == 0 {
-		writeError(w, http.StatusBadRequest, "OIDC 账户密码由身份提供方管理")
-		return
-	}
-	if !auth.ComparePassword(got.PasswordHash, req.OldPassword) {
+	// 有本地密码时须验证旧密码；无密码（纯 OIDC 自动建号账户）允许直接设置——
+	// 这是解绑 OIDC 前置条件「先设置本地密码」的唯一自助通道，
+	// 拒绝会让这类用户永远无法解绑（提示与实际路径矛盾）。
+	if len(got.PasswordHash) > 0 && !auth.ComparePassword(got.PasswordHash, req.OldPassword) {
 		writeError(w, http.StatusUnauthorized, "旧密码不正确")
 		return
 	}

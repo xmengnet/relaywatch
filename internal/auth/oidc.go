@@ -29,9 +29,10 @@ type OIDCService struct {
 	SessionTTL time.Duration
 	BaseURL    string // 外部可达地址，回调 URL 用
 
-	mu        sync.Mutex
-	verifiers map[string]*oidc.IDTokenVerifier // issuer -> verifier
-	pending   map[string]*pendingAuth          // state -> 请求上下文
+	mu          sync.Mutex
+	verifiers   map[string]*oidc.IDTokenVerifier // issuer -> verifier
+	pending     map[string]*pendingAuth          // state -> 请求上下文
+	bindConfirm map[string]*bindConfirmReq       // 确认 token -> 待确认绑定
 }
 
 type pendingAuth struct {
@@ -41,17 +42,36 @@ type pendingAuth struct {
 	CreatedAt    time.Time
 }
 
+// bindConfirmReq 回调校验通过后待用户确认的绑定。绑定生效前必须由
+// 该用户在自己的会话里确认：回调 URL 中的 state 可能经浏览器历史/代理日志
+// 泄露，或 IdP 侧会话与发起者不符，直接生效等于无确认的账号接管通道。
+type bindConfirmReq struct {
+	UserID    int64
+	Provider  string
+	Subject   string
+	Display   string
+	CreatedAt time.Time
+}
+
+// BindConfirmation 待确认绑定对外视图（不含 subject）。
+type BindConfirmation struct {
+	Token    string
+	Provider string
+	Identity string // IdP 侧显示名/邮箱
+}
+
 // pendingAuthTTL 是 OIDC state 的有效期：超时后回调一律拒绝。
 const pendingAuthTTL = 10 * time.Minute
 
 // NewOIDCService 构造。
 func NewOIDCService(st store.Store, sessionTTL time.Duration, baseURL string) *OIDCService {
 	return &OIDCService{
-		Store:      st,
-		SessionTTL: sessionTTL,
-		BaseURL:    strings.TrimRight(baseURL, "/"),
-		verifiers:  map[string]*oidc.IDTokenVerifier{},
-		pending:    map[string]*pendingAuth{},
+		Store:       st,
+		SessionTTL:  sessionTTL,
+		BaseURL:     strings.TrimRight(baseURL, "/"),
+		verifiers:   map[string]*oidc.IDTokenVerifier{},
+		pending:     map[string]*pendingAuth{},
+		bindConfirm: map[string]*bindConfirmReq{},
 	}
 }
 
@@ -115,44 +135,48 @@ type OIDCUser struct {
 }
 
 // Finish 统一处理 IdP 回调：登录与绑定共用同一 redirect URL，按 pending 中
-// 记录的流程类型（BindUserID）分流。绑定流程返回 bound=true（u 为 nil），
-// 身份已被他人绑定时返回 ErrOIDCTaken；未绑定且注册已关闭返回 ErrOIDCNotBound。
-func (s *OIDCService) Finish(ctx context.Context, providerName, state, code string) (u *store.User, bound bool, err error) {
+// 记录的流程类型（BindUserID）分流。绑定流程返回 bound=true 与待确认的
+// confirm（不直接落库，见 ConfirmBind）；身份已被他人绑定时返回 ErrOIDCTaken；
+// 未绑定且注册已关闭返回 ErrOIDCNotBound。
+func (s *OIDCService) Finish(ctx context.Context, providerName, state, code string) (u *store.User, bound bool, confirm *BindConfirmation, err error) {
 	pa, perr := s.takePending(providerName, state)
 	if perr != nil {
-		return nil, false, perr
+		return nil, false, nil, perr
 	}
 	bound = pa.BindUserID != 0
 	p, err := s.Store.OIDCProviderByName(ctx, providerName)
 	if err != nil {
-		return nil, bound, err
+		return nil, bound, nil, err
+	}
+	// begin 时校验过 Enabled，但回调距发起可达 10 分钟，中途停用不得继续
+	if !p.Enabled {
+		return nil, bound, nil, fmt.Errorf("OIDC provider %q 已停用", providerName)
 	}
 	claims, err := s.finishOIDC(ctx, p, code, pa.Verifier)
 	if err != nil {
-		return nil, bound, err
+		return nil, bound, nil, err
 	}
 
 	if bound {
 		existing, err := s.Store.UserByOIDC(ctx, p.Name, claims.Subject)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return nil, bound, err
+			return nil, bound, nil, err
 		}
 		if existing != nil && existing.ID != pa.BindUserID {
-			return nil, bound, ErrOIDCTaken
+			return nil, bound, nil, ErrOIDCTaken
 		}
-		if existing == nil {
-			if err := s.Store.SetUserOIDC(ctx, pa.BindUserID, p.Name, claims.Subject); err != nil {
-				return nil, bound, err
-			}
+		if existing != nil {
+			// 已绑到发起用户本人：无需重复绑定
+			return nil, bound, nil, nil
 		}
-		return nil, bound, nil
+		return nil, bound, s.stageBindConfirm(pa.BindUserID, p.Name, claims), nil
 	}
 
 	// 登录流程：查找或创建用户
 	u, err = s.Store.UserByOIDC(ctx, p.Name, claims.Subject)
 	if errors.Is(err, store.ErrNotFound) {
 		if !s.autoProvisionAllowed(ctx) {
-			return nil, bound, ErrOIDCNotBound
+			return nil, bound, nil, ErrOIDCNotBound
 		}
 		u = &store.User{
 			Username:     firstNonEmpty(claims.Name, claims.Email, claims.Subject),
@@ -162,18 +186,18 @@ func (s *OIDCService) Finish(ctx context.Context, providerName, state, code stri
 			OIDCSubject:  claims.Subject,
 		}
 		if err := s.Store.CreateUser(ctx, u); err != nil {
-			return nil, bound, err
+			return nil, bound, nil, err
 		}
 	} else if err != nil {
-		return nil, bound, err
+		return nil, bound, nil, err
 	}
 	if u.Disabled {
-		return nil, bound, ErrForbidden
+		return nil, bound, nil, ErrForbidden
 	}
 	if err := s.Store.UpdateUserLogin(ctx, u.ID, time.Now()); err != nil {
-		return nil, bound, err
+		return nil, bound, nil, err
 	}
-	return u, bound, nil
+	return u, bound, nil, nil
 }
 
 // takePending 取出并删除一次性 state；流程类型由 pending 记录的 BindUserID 决定。
@@ -190,13 +214,76 @@ func (s *OIDCService) takePending(providerName, state string) (*pendingAuth, err
 	return pa, nil
 }
 
-// PendingIsBind 查询 state 对应的流程类型（不消费）。
-// 供 IdP 错误回跳（error 参数）时决定落点：绑定回个人资料页，登录回登录页。
-func (s *OIDCService) PendingIsBind(state string) bool {
+// TakePendingIsBind 消费 state 并返回是否绑定流程。IdP 错误回跳后该流程已失败，
+// state 同样一次性作废（否则 10 分钟内仍可被 Finish 带合法 code 复用）。
+func (s *OIDCService) TakePendingIsBind(state string) bool {
+	s.mu.Lock()
+	pa, ok := s.pending[state]
+	delete(s.pending, state)
+	s.mu.Unlock()
+	return ok && pa.BindUserID != 0
+}
+
+// stageBindConfirm 登记待确认绑定并返回确认令牌。
+func (s *OIDCService) stageBindConfirm(userID int64, provider string, claims *OIDCUser) *BindConfirmation {
+	token := RandomToken(32)
+	display := firstNonEmpty(claims.Name, claims.Email, claims.Subject)
+	s.mu.Lock()
+	// 清理过期确认项
+	now := time.Now()
+	for k, v := range s.bindConfirm {
+		if now.Sub(v.CreatedAt) > pendingAuthTTL {
+			delete(s.bindConfirm, k)
+		}
+	}
+	s.bindConfirm[token] = &bindConfirmReq{
+		UserID: userID, Provider: provider, Subject: claims.Subject,
+		Display: display, CreatedAt: now,
+	}
+	s.mu.Unlock()
+	return &BindConfirmation{Token: token, Provider: provider, Identity: display}
+}
+
+// BindConfirmInfo 查询待确认绑定（校验归属当前用户，不消费）。
+func (s *OIDCService) BindConfirmInfo(userID int64, token string) (*BindConfirmation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pa, ok := s.pending[state]
-	return ok && pa.BindUserID != 0
+	req, ok := s.bindConfirm[token]
+	if !ok || req.UserID != userID || time.Since(req.CreatedAt) > pendingAuthTTL {
+		return nil, fmt.Errorf("确认请求无效或已过期")
+	}
+	return &BindConfirmation{Token: token, Provider: req.Provider, Identity: req.Display}, nil
+}
+
+// ConfirmBind 确认绑定生效：校验归属与时效后落库并消费确认令牌。
+// 校验失败不消费（避免知道 token 的第三方抢先作废发起人的确认）；
+// 确认期间身份可能已被他人绑定（ErrOIDCTaken）；发起用户可能已被删除
+// （store 层 ErrNotFound）。
+func (s *OIDCService) ConfirmBind(ctx context.Context, token string, userID int64) error {
+	s.mu.Lock()
+	req, ok := s.bindConfirm[token]
+	if ok && req.UserID == userID && time.Since(req.CreatedAt) <= pendingAuthTTL {
+		delete(s.bindConfirm, token) // 校验通过才消费（一次性）
+	} else {
+		ok = false
+	}
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("确认请求无效或已过期")
+	}
+	existing, err := s.Store.UserByOIDC(ctx, req.Provider, req.Subject)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	if existing != nil && existing.ID != userID {
+		return ErrOIDCTaken
+	}
+	if existing == nil {
+		if err := s.Store.SetUserOIDC(ctx, userID, req.Provider, req.Subject); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // finishOIDC 回调公共段：code 换 token、验证 ID Token、提取 claims 并校验 claim 规则。

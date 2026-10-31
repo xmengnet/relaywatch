@@ -12,6 +12,7 @@ import (
 
 	"relaywatch/internal/auth"
 	"relaywatch/internal/notifier"
+	"relaywatch/internal/source"
 	"relaywatch/internal/store"
 )
 
@@ -79,6 +80,7 @@ func newMultiUserEnvWithOptions(t *testing.T, box store.SecretBox, limiter *auth
 	s := &Server{
 		Auth:         svc,
 		Store:        st,
+		Registry:     source.NewDefaultRegistry(),
 		Notifiers:    notifier.NewDefaultRegistry(),
 		SecretBox:    box,
 		LoginLimiter: limiter,

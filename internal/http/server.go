@@ -61,7 +61,8 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	r.Handle("/metrics", &MetricsHandler{St: s.Store})
+	// 运营计数不对匿名开放；Prometheus 等抓取器用 API Token（Authorization 头）
+	r.Handle("/metrics", auth.RequireAuth(&MetricsHandler{St: s.Store}))
 
 	// OIDC 302 跳转（不经过 /api/v1，SPA 无法消费 302）
 	if s.OIDC != nil {
@@ -137,6 +138,8 @@ func (s *Server) Handler() http.Handler {
 				// providers 管理仅 admin；/auth/providers 公开端点在上面匿名组已注册
 				oidcH := &OIDCHandler{Svc: s.OIDC, St: s.Store, SecureCookies: s.SecureCookies}
 				oidcH.routesAdmin(r)
+				// 绑定确认（所有登录用户）
+				oidcH.routesAuth(r)
 			}
 
 			tokH := &TokenHandler{Svc: s.Auth, St: s.Store}

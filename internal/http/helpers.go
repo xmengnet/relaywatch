@@ -55,16 +55,21 @@ func canAccessMonitor(u *store.User, m *store.Monitor) bool {
 }
 
 // canAccessChannel admin 全通；普通用户可访问自己的与全局共享（owner 为 nil）渠道。
+// 与列表语义一致：ListChannelsVisible 返回「自己的 + 共享」，详情不应 404。
 func canAccessChannel(u *store.User, c *store.Channel) bool {
 	if isAdmin(u) {
 		return true
 	}
-	return c != nil && c.OwnerID != nil && *c.OwnerID == u.ID
+	return c != nil && (c.OwnerID == nil || *c.OwnerID == u.ID)
 }
 
-// canModifyChannel 在可见基础上进一步限制写权限：普通用户不能改全局共享渠道。
+// canModifyChannel 在可见基础上限制写权限：共享渠道仅 admin 可改，普通用户只能改自己的。
+// 无修改权的用户读取渠道时，config 中的机密字段应掩码。
 func canModifyChannel(u *store.User, c *store.Channel) bool {
-	return canAccessChannel(u, c)
+	if isAdmin(u) {
+		return true
+	}
+	return c != nil && c.OwnerID != nil && *c.OwnerID == u.ID
 }
 
 // timeNow 便于测试替换。

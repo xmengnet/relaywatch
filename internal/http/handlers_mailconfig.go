@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"strings"
 	"time"
@@ -117,7 +119,10 @@ func (h *MailConfigHandler) put(w http.ResponseWriter, r *http.Request) {
 	if req.Password != nil && *req.Password != "" {
 		sc.PasswordEnc = *req.Password
 		if h.Box != nil {
-			if enc, err := h.Box.Encrypt(*req.Password); err == nil {
+			enc, err := h.Box.Encrypt(*req.Password)
+			if err != nil {
+				slog.Error("mail config password encrypt failed, storing plaintext", "err", err)
+			} else {
 				sc.PasswordEnc = enc
 			}
 		}
@@ -125,7 +130,10 @@ func (h *MailConfigHandler) put(w http.ResponseWriter, r *http.Request) {
 		// 留空 = 不修改：沿用旧密文（load 已解密，重新加密）
 		sc.PasswordEnc = oldPw
 		if h.Box != nil {
-			if enc, err := h.Box.Encrypt(oldPw); err == nil {
+			enc, err := h.Box.Encrypt(oldPw)
+			if err != nil {
+				slog.Error("mail config password re-encrypt failed", "err", err)
+			} else {
 				sc.PasswordEnc = enc
 			}
 		}
@@ -152,6 +160,11 @@ func (h *MailConfigHandler) test(w http.ResponseWriter, r *http.Request) {
 	to := strings.TrimSpace(got.Email)
 	if to == "" {
 		writeError(w, http.StatusBadRequest, "当前账户未维护邮箱，请先在「个人资料」中填写")
+		return
+	}
+	// 收件人直拼 SMTP 信封与 To 头，带 CRLF 的值可注入头部；格式不对直接拒绝
+	if addr, err := mail.ParseAddress(to); err != nil || addr.Address != to {
+		writeError(w, http.StatusBadRequest, "当前账户邮箱格式不正确，请先在「个人资料」中修正")
 		return
 	}
 	cfg, pw, err := h.load(r.Context())
@@ -181,9 +194,9 @@ func (h *MailConfigHandler) SendSystemMail(ctx context.Context, to, subject, bod
 func sendSystemMail(ctx context.Context, cfg *mailConfig, password, to, subject, body string) error {
 	addr := cfg.Host + ":" + cfg.Port
 	content := strings.Join([]string{
-		"From: " + cfg.From,
-		"To: " + to,
-		"Subject: " + subject,
+		"From: " + sanitizeMailHeader(cfg.From),
+		"To: " + sanitizeMailHeader(to),
+		"Subject: " + sanitizeMailHeader(subject),
 		"MIME-Version: 1.0",
 		"Content-Type: text/plain; charset=utf-8",
 		"",
@@ -194,6 +207,16 @@ func sendSystemMail(ctx context.Context, cfg *mailConfig, password, to, subject,
 		auth = smtp.PlainAuth("", cfg.Username, password, cfg.Host)
 	}
 	return notifier.SendSystemMailRaw(ctx, addr, cfg.Host, cfg.Encryption, auth, cfg.From, []string{to}, []byte(content))
+}
+
+// sanitizeMailHeader 把邮件头值中的 CR/LF 替换为空格，阻断头部注入。
+func sanitizeMailHeader(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // ---------- 注册邮箱验证码 ----------
@@ -213,7 +236,12 @@ func GenerateRegCode(ctx context.Context, st store.Store, email string) (string,
 	return code, nil
 }
 
+// regCodeMaxAttempts 单个验证码允许的最大错误次数，超过即作废。
+// 6 位数字码 10 分钟有效，无上限时可被在线枚举爆破。
+const regCodeMaxAttempts = 5
+
 // VerifyRegCode 校验并原子消费验证码（一次性，按邮箱隔离）。
+// 连续错误达到上限后作废，需重新获取（新码发送走邮箱，邮箱主人可感知）。
 func VerifyRegCode(ctx context.Context, st store.Store, email, code string) error {
 	rec, ok, err := st.GetRegistrationCode(ctx, email)
 	if err != nil {
@@ -225,7 +253,14 @@ func VerifyRegCode(ctx context.Context, st store.Store, email, code string) erro
 	if time.Now().After(rec.ExpiresAt) {
 		return fmt.Errorf("验证码已过期，请重新获取")
 	}
+	if rec.Attempts >= regCodeMaxAttempts {
+		_ = st.DeleteRegistrationCode(ctx, email)
+		return fmt.Errorf("错误次数过多，验证码已作废，请重新获取")
+	}
 	if rec.Code != code {
+		if n, err := st.BumpRegistrationCodeAttempts(ctx, email); err == nil && n >= regCodeMaxAttempts {
+			_ = st.DeleteRegistrationCode(ctx, email)
+		}
 		return fmt.Errorf("验证码不正确")
 	}
 	consumed, err := st.ConsumeRegistrationCode(ctx, email, code, time.Now())

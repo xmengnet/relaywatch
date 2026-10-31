@@ -174,6 +174,22 @@ func (h *MonitorHandler) validateReference(ctx context.Context, selfID, selfOwne
 	return nil
 }
 
+// validateChannelIDs 校验绑定的渠道均为当前用户可访问（自己的或共享的）。
+// 全链路曾无归属校验，用户可把他人私有渠道绑到自己监控（横向越权）。
+// 归属不符与不存在同样报错，防枚举。
+func (h *MonitorHandler) validateChannelIDs(ctx context.Context, u *store.User, ids []int64) error {
+	for _, id := range ids {
+		c, err := h.St.GetChannel(ctx, id)
+		if err != nil {
+			return fmt.Errorf("绑定的渠道不存在（#%d）", id)
+		}
+		if !canAccessChannel(u, c) {
+			return fmt.Errorf("绑定的渠道不存在（#%d）", id)
+		}
+	}
+	return nil
+}
+
 func (h *MonitorHandler) create(w http.ResponseWriter, r *http.Request) {
 	var p monitorPayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
@@ -189,6 +205,10 @@ func (h *MonitorHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := authUser(r)
+	if err := h.validateChannelIDs(r.Context(), u, p.ChannelIDs); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := h.validateReference(r.Context(), 0, u.ID, p.ReferenceMonitorID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -252,6 +272,11 @@ func (h *MonitorHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	u := authUser(r)
+	if err := h.validateChannelIDs(r.Context(), u, p.ChannelIDs); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := h.validateReference(r.Context(), id, m.OwnerID, p.ReferenceMonitorID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -260,6 +285,18 @@ func (h *MonitorHandler) update(w http.ResponseWriter, r *http.Request) {
 	if err := h.St.UpdateMonitor(r.Context(), m); err != nil {
 		writeInternalError(w, err)
 		return
+	}
+	// 手动改基线（current_version/state）走定向更新，不随整行编辑覆盖检查状态
+	if p.CurrentVersion != nil || p.State != nil {
+		var state *store.MonitorState
+		if p.State != nil {
+			st := store.MonitorState(*p.State)
+			state = &st
+		}
+		if err := h.St.SetMonitorBaseline(r.Context(), id, state, p.CurrentVersion); err != nil {
+			writeInternalError(w, err)
+			return
+		}
 	}
 	if m.ReferenceMonitorID != nil && h.Evaluator != nil {
 		_ = h.Evaluator.EvaluatePair(r.Context(), id)
@@ -326,17 +363,21 @@ func (h *MonitorHandler) batch(w http.ResponseWriter, r *http.Request) {
 		}
 		switch req.Action {
 		case "enable":
+			enabled := true
 			if req.Fields != nil && req.Fields.Enabled != nil {
-				m.Enabled = *req.Fields.Enabled
-			} else {
-				m.Enabled = true
+				enabled = *req.Fields.Enabled
+			}
+			if err := h.St.SetMonitorEnabled(r.Context(), id, enabled); err == nil {
+				affected++
 			}
 		case "disable":
-			m.Enabled = false
 			// 停用作废该监控的待投递记录（需求 3.3）
 			if _, err := h.St.CancelOpenDeliveries(r.Context(), id, "monitor disabled"); err != nil {
 				writeInternalError(w, err)
 				return
+			}
+			if err := h.St.SetMonitorEnabled(r.Context(), id, false); err == nil {
+				affected++
 			}
 		case "delete":
 			if err := h.St.DeleteMonitor(r.Context(), id); err == nil {
@@ -346,9 +387,6 @@ func (h *MonitorHandler) batch(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeError(w, http.StatusBadRequest, "不支持的 action: "+req.Action)
 			return
-		}
-		if err := h.St.UpdateMonitor(r.Context(), m); err == nil {
-			affected++
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"affected": affected})
@@ -441,12 +479,7 @@ func applyPayload(m *store.Monitor, p *monitorPayload) {
 	if p.ChannelIDs != nil {
 		m.ChannelIDs = p.ChannelIDs
 	}
-	if p.CurrentVersion != nil {
-		m.CurrentVersion = *p.CurrentVersion
-	}
-	if p.State != nil {
-		m.State = store.MonitorState(*p.State)
-	}
+	// current_version/state 不在此应用：基线修改由 handler 定向 SetMonitorBaseline
 }
 
 func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {

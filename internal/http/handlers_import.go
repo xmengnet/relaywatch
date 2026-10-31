@@ -125,6 +125,8 @@ func (h *ImportExportHandler) doImport(w http.ResponseWriter, r *http.Request) {
 		}
 		cfgJSON, _ := json.Marshal(it.SourceConfig)
 		m := &store.Monitor{
+			// 归属导入者：漏设会让监控落 owner_id=0，导入者自己不可见（仅 admin 可见）
+			OwnerID:             authUser(r).ID,
 			Name:                it.Name,
 			SourceType:          it.SourceType,
 			SourceConfig:        string(cfgJSON),
@@ -182,20 +184,33 @@ var secretKeys = map[string]bool{
 
 // exportAll GET /export?redact=1（默认脱敏）。
 // 普通用户导出自己的资源；admin 默认全部，?owner=me 仅导出自己的。
+// redact=0（明文导出）仅 admin：明文含共享渠道机密，不能随导出权限批量带走。
 func (h *ImportExportHandler) exportAll(w http.ResponseWriter, r *http.Request) {
-	redact := r.URL.Query().Get("redact") != "0"
-
 	u := authUser(r)
-	filter := store.MonitorFilter{PerPage: 10000}
-	if !isAdmin(u) || r.URL.Query().Get("owner") == "me" {
-		filter.OwnerID = u.ID
-	}
-	monitors, _, err := h.St.ListMonitors(r.Context(), filter)
-	if err != nil {
-		writeInternalError(w, err)
+	redact := r.URL.Query().Get("redact") != "0"
+	if !redact && !isAdmin(u) {
+		forbidPermission(w, "明文导出")
 		return
 	}
+	ownerFilter := int64(0)
+	if !isAdmin(u) || r.URL.Query().Get("owner") == "me" {
+		ownerFilter = u.ID
+	}
+	// 分页拉全量：ListMonitors 钳制 per_page≤100，单次大请求会被静默截断丢数据
+	var monitors []*store.Monitor
+	for page := 1; ; page++ {
+		items, total, err := h.St.ListMonitors(r.Context(), store.MonitorFilter{OwnerID: ownerFilter, Page: page, PerPage: 100})
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		monitors = append(monitors, items...)
+		if len(items) == 0 || len(monitors) >= total {
+			break
+		}
+	}
 	var channels []*store.Channel
+	var err error
 	if isAdmin(u) {
 		channels, err = h.St.ListChannelsAll(r.Context())
 	} else {

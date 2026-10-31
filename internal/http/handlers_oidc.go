@@ -33,9 +33,16 @@ func (h *OIDCHandler) routesAdmin(r chiRouterIface) {
 	r.With(auth.RequireAdmin).Get("/auth/providers/all", h.listAll)
 	r.With(auth.RequireAdmin).Get("/auth/providers/{id}", h.getOne)
 	r.With(auth.RequireAdmin).Get("/auth/oidc/callback-url", h.callbackBase)
-	r.Post("/auth/providers", h.create)
-	r.Patch("/auth/providers/{id}", h.update)
-	r.Delete("/auth/providers/{id}", h.remove)
+	// 写接口同样仅 admin：普通用户可改 issuer 劫持全站 OIDC 登录/绑定流程
+	r.With(auth.RequireAdmin).Post("/auth/providers", h.create)
+	r.With(auth.RequireAdmin).Patch("/auth/providers/{id}", h.update)
+	r.With(auth.RequireAdmin).Delete("/auth/providers/{id}", h.remove)
+}
+
+// routesAuth 绑定确认端点：所有登录用户可用（挂在 RequireAuth+RequireCSRF 组）。
+func (h *OIDCHandler) routesAuth(r chiRouterIface) {
+	r.Get("/auth/bind/pending", h.bindPending)
+	r.Post("/auth/bind/confirm", h.bindConfirm)
 }
 
 // callbackBase GET /auth/oidc/callback-url（admin）：回调地址的 base_url 部分，
@@ -76,16 +83,17 @@ func (h *OIDCHandler) bindBegin(w http.ResponseWriter, r *http.Request) {
 func (h *OIDCHandler) callback(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	state := r.URL.Query().Get("state")
-	// IdP 回传错误（如用户取消授权）：按流程类型回对应页面
+	// IdP 回传错误（如用户取消授权）：按流程类型回对应页面。
+	// state 一次性：错误回跳同样消费，防止 TTL 内被携带合法 code 复用。
 	if errCode := r.URL.Query().Get("error"); errCode != "" {
-		if h.Svc.PendingIsBind(state) {
+		if h.Svc.TakePendingIsBind(state) {
 			http.Redirect(w, r, "/profile?oidc_error=bind_failed", http.StatusFound)
 		} else {
 			http.Redirect(w, r, "/login?error="+errCode, http.StatusFound)
 		}
 		return
 	}
-	u, bound, err := h.Svc.Finish(r.Context(), name, state, r.URL.Query().Get("code"))
+	u, bound, confirm, err := h.Svc.Finish(r.Context(), name, state, r.URL.Query().Get("code"))
 	if err != nil {
 		if bound {
 			code := "bind_failed"
@@ -103,6 +111,11 @@ func (h *OIDCHandler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if bound {
+		// 绑定不直接生效：回个人资料页展示确认 UI，由当前会话用户确认后落库
+		if confirm != nil {
+			http.Redirect(w, r, "/profile?bind_confirm="+confirm.Token, http.StatusFound)
+			return
+		}
 		http.Redirect(w, r, "/profile?oidc_bound=1", http.StatusFound)
 		return
 	}
@@ -117,7 +130,35 @@ func (h *OIDCHandler) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
-func void(...any) {}
+// bindPending GET /auth/bind/pending?token=：查询待确认绑定（校验归属当前用户）。
+func (h *OIDCHandler) bindPending(w http.ResponseWriter, r *http.Request) {
+	info, err := h.Svc.BindConfirmInfo(authUser(r).ID, r.URL.Query().Get("token"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"provider": info.Provider, "identity": info.Identity})
+}
+
+// bindConfirm POST /auth/bind/confirm {token}：当前用户确认绑定生效。
+func (h *OIDCHandler) bindConfirm(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if err := h.Svc.ConfirmBind(r.Context(), req.Token, authUser(r).ID); err != nil {
+		if errors.Is(err, auth.ErrOIDCTaken) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
 
 // list 公开：登录页渲染按钮（只暴露 name/label）。
 func (h *OIDCHandler) list(w http.ResponseWriter, r *http.Request) {
