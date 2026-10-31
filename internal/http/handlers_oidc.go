@@ -21,12 +21,11 @@ type OIDCHandler struct {
 }
 
 func (h *OIDCHandler) routesPublic(r chi.Router) {
-	// 服务端 302 跳转，不走 /api/v1（SPA 无法处理 302 到 IdP）
+	// 服务端 302 跳转，不走 /api/v1（SPA 无法处理 302 到 IdP）。
+	// callback 登录与账号绑定共用（state 区分流程），IdP 侧只需注册一个回调地址。
 	r.Get("/auth/oidc/{name}", h.begin)
 	r.Get("/auth/oidc/{name}/callback", h.callback)
-	// 绑定流程：需登录态（全局 auth.Middleware 已注入用户），发起与回调均为浏览器 302
-	r.Get("/auth/oidc/{name}/bind", h.bindBegin)
-	r.Get("/auth/oidc/{name}/bind/callback", h.bindCallback)
+	r.Get("/auth/oidc/{name}/bind", h.bindBegin) // 绑定发起，需登录态
 }
 
 func (h *OIDCHandler) routesAdmin(r chiRouterIface) {
@@ -57,7 +56,7 @@ func (h *OIDCHandler) begin(w http.ResponseWriter, r *http.Request) {
 }
 
 // bindBegin GET /auth/oidc/{name}/bind：已登录用户发起绑定，302 到 IdP。
-// 匿名访问直接回登录页（state 即防 CSRF，GET 导航无需 CSRF 头）。
+// 回调统一走 /auth/oidc/{name}/callback（state 区分流程），匿名访问直接回登录页。
 func (h *OIDCHandler) bindBegin(w http.ResponseWriter, r *http.Request) {
 	u := authUser(r)
 	if u == nil {
@@ -72,40 +71,39 @@ func (h *OIDCHandler) bindBegin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
-// bindCallback GET /auth/oidc/{name}/bind/callback → 绑定 → 302 回个人资料页。
-func (h *OIDCHandler) bindCallback(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	if errCode := r.URL.Query().Get("error"); errCode != "" {
-		http.Redirect(w, r, "/profile?oidc_error=bind_failed", http.StatusFound)
-		return
-	}
-	if _, err := h.Svc.CompleteBind(r.Context(), name, r.URL.Query().Get("state"), r.URL.Query().Get("code")); err != nil {
-		code := "bind_failed"
-		if errors.Is(err, auth.ErrOIDCTaken) {
-			code = "bind_taken"
-		}
-		http.Redirect(w, r, "/profile?oidc_error="+code, http.StatusFound)
-		return
-	}
-	http.Redirect(w, r, "/profile?oidc_bound=1", http.StatusFound)
-}
-
-// callback GET /auth/oidc/{name}/callback → 建会话 → 302 回前端。
+// callback GET /auth/oidc/{name}/callback → 登录建会话或完成账号绑定 → 302 回前端。
+// 两种流程共用此端点，由 pending 中的 state 区分。
 func (h *OIDCHandler) callback(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	state := r.URL.Query().Get("state")
+	// IdP 回传错误（如用户取消授权）：按流程类型回对应页面
 	if errCode := r.URL.Query().Get("error"); errCode != "" {
-		desc := r.URL.Query().Get("error_description")
-		http.Redirect(w, r, "/login?error="+errCode, http.StatusFound)
-		void(desc)
+		if h.Svc.PendingIsBind(state) {
+			http.Redirect(w, r, "/profile?oidc_error=bind_failed", http.StatusFound)
+		} else {
+			http.Redirect(w, r, "/login?error="+errCode, http.StatusFound)
+		}
 		return
 	}
-	u, err := h.Svc.Complete(r.Context(), name, r.URL.Query().Get("state"), r.URL.Query().Get("code"))
+	u, bound, err := h.Svc.Finish(r.Context(), name, state, r.URL.Query().Get("code"))
 	if err != nil {
+		if bound {
+			code := "bind_failed"
+			if errors.Is(err, auth.ErrOIDCTaken) {
+				code = "bind_taken"
+			}
+			http.Redirect(w, r, "/profile?oidc_error="+code, http.StatusFound)
+			return
+		}
 		code := "oidc_failed"
 		if errors.Is(err, auth.ErrOIDCNotBound) {
 			code = "oidc_unbound"
 		}
 		http.Redirect(w, r, "/login?error="+code, http.StatusFound)
+		return
+	}
+	if bound {
+		http.Redirect(w, r, "/profile?oidc_bound=1", http.StatusFound)
 		return
 	}
 	sess, err := h.Svc.SessionFor(r.Context(), u.ID, r.UserAgent(), clientIP(r))

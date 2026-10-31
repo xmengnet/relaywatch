@@ -457,7 +457,7 @@ export default {
     providerDisabled: '已停用',
     providerName: '名称',
     providerNameHint: '用于登录按钮与 URL，如 github、casdoor',
-    callback: '回调地址（填到 IdP 的 Redirect URI）：',
+    callback: '回调地址（登录与账号绑定共用，填到 IdP 的 Redirect URI）：',
     issuer: 'Issuer',
     issuerHint: 'IdP 的 issuer 地址，服务端读 {issuer}/.well-known/openid-configuration 发现端点',
     clientId: 'Client ID',

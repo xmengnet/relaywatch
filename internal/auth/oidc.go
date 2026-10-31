@@ -61,6 +61,8 @@ func (s *OIDCService) Begin(ctx context.Context, providerName string) (redirectU
 }
 
 // BeginBind 绑定流程入口：已登录用户跳转 IdP，回调后把 IdP 身份绑到该用户而非建会话。
+// 回调与登录共用同一 redirect URL（/auth/oidc/{name}/callback），由 state 区分流程，
+// IdP 侧只需注册一个回调地址。
 func (s *OIDCService) BeginBind(ctx context.Context, providerName string, userID int64) (redirectURL string, err error) {
 	return s.begin(ctx, providerName, userID)
 }
@@ -94,9 +96,6 @@ func (s *OIDCService) begin(ctx context.Context, providerName string, bindUserID
 	s.mu.Unlock()
 
 	redirectPath := "/auth/oidc/" + providerName + "/callback"
-	if bindUserID != 0 {
-		redirectPath = "/auth/oidc/" + providerName + "/bind/callback"
-	}
 	oc := oauth2.Config{
 		ClientID:     p.ClientID,
 		ClientSecret: p.ClientSecret,
@@ -115,28 +114,45 @@ type OIDCUser struct {
 	Email   string
 }
 
-// Complete 处理登录回调：校验 state、换 token、验证 ID Token、检查 claim 规则。
-// 未绑定的 IdP 身份仅在注册开启时自动建号（与本地注册共用 registration.enabled 开关），
-// 否则返回 ErrOIDCNotBound，引导用户先在「个人资料」完成绑定。
-func (s *OIDCService) Complete(ctx context.Context, providerName, state, code string) (*store.User, error) {
-	pa, err := s.takePending(providerName, state, false)
-	if err != nil {
-		return nil, err
+// Finish 统一处理 IdP 回调：登录与绑定共用同一 redirect URL，按 pending 中
+// 记录的流程类型（BindUserID）分流。绑定流程返回 bound=true（u 为 nil），
+// 身份已被他人绑定时返回 ErrOIDCTaken；未绑定且注册已关闭返回 ErrOIDCNotBound。
+func (s *OIDCService) Finish(ctx context.Context, providerName, state, code string) (u *store.User, bound bool, err error) {
+	pa, perr := s.takePending(providerName, state)
+	if perr != nil {
+		return nil, false, perr
 	}
+	bound = pa.BindUserID != 0
 	p, err := s.Store.OIDCProviderByName(ctx, providerName)
 	if err != nil {
-		return nil, err
+		return nil, bound, err
 	}
 	claims, err := s.finishOIDC(ctx, p, code, pa.Verifier)
 	if err != nil {
-		return nil, err
+		return nil, bound, err
 	}
 
-	// 查找或创建用户
-	u, err := s.Store.UserByOIDC(ctx, p.Name, claims.Subject)
+	if bound {
+		existing, err := s.Store.UserByOIDC(ctx, p.Name, claims.Subject)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, bound, err
+		}
+		if existing != nil && existing.ID != pa.BindUserID {
+			return nil, bound, ErrOIDCTaken
+		}
+		if existing == nil {
+			if err := s.Store.SetUserOIDC(ctx, pa.BindUserID, p.Name, claims.Subject); err != nil {
+				return nil, bound, err
+			}
+		}
+		return nil, bound, nil
+	}
+
+	// 登录流程：查找或创建用户
+	u, err = s.Store.UserByOIDC(ctx, p.Name, claims.Subject)
 	if errors.Is(err, store.ErrNotFound) {
 		if !s.autoProvisionAllowed(ctx) {
-			return nil, ErrOIDCNotBound
+			return nil, bound, ErrOIDCNotBound
 		}
 		u = &store.User{
 			Username:     firstNonEmpty(claims.Name, claims.Email, claims.Subject),
@@ -146,52 +162,22 @@ func (s *OIDCService) Complete(ctx context.Context, providerName, state, code st
 			OIDCSubject:  claims.Subject,
 		}
 		if err := s.Store.CreateUser(ctx, u); err != nil {
-			return nil, err
+			return nil, bound, err
 		}
 	} else if err != nil {
-		return nil, err
+		return nil, bound, err
 	}
 	if u.Disabled {
-		return nil, ErrForbidden
+		return nil, bound, ErrForbidden
 	}
 	if err := s.Store.UpdateUserLogin(ctx, u.ID, time.Now()); err != nil {
-		return nil, err
+		return nil, bound, err
 	}
-	return u, nil
+	return u, bound, nil
 }
 
-// CompleteBind 处理绑定回调：把 IdP 身份绑到发起绑定的用户上，返回绑定的 provider 名。
-// 该 IdP 身份已被其他用户绑定时返回 ErrOIDCTaken；重复绑定自己视为成功（幂等）。
-func (s *OIDCService) CompleteBind(ctx context.Context, providerName, state, code string) (string, error) {
-	pa, err := s.takePending(providerName, state, true)
-	if err != nil {
-		return "", err
-	}
-	p, err := s.Store.OIDCProviderByName(ctx, providerName)
-	if err != nil {
-		return "", err
-	}
-	claims, err := s.finishOIDC(ctx, p, code, pa.Verifier)
-	if err != nil {
-		return "", err
-	}
-	existing, err := s.Store.UserByOIDC(ctx, p.Name, claims.Subject)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return "", err
-	}
-	if existing != nil && existing.ID != pa.BindUserID {
-		return "", ErrOIDCTaken
-	}
-	if existing == nil {
-		if err := s.Store.SetUserOIDC(ctx, pa.BindUserID, p.Name, claims.Subject); err != nil {
-			return "", err
-		}
-	}
-	return p.Name, nil
-}
-
-// takePending 取出并删除一次性 state；bind 流程要求 BindUserID 非 0，登录流程要求为 0。
-func (s *OIDCService) takePending(providerName, state string, wantBind bool) (*pendingAuth, error) {
+// takePending 取出并删除一次性 state；流程类型由 pending 记录的 BindUserID 决定。
+func (s *OIDCService) takePending(providerName, state string) (*pendingAuth, error) {
 	s.mu.Lock()
 	pa, ok := s.pending[state]
 	if ok {
@@ -201,10 +187,16 @@ func (s *OIDCService) takePending(providerName, state string, wantBind bool) (*p
 	if !ok || pa.ProviderName != providerName || time.Since(pa.CreatedAt) > pendingAuthTTL {
 		return nil, fmt.Errorf("state 无效或已过期")
 	}
-	if wantBind != (pa.BindUserID != 0) {
-		return nil, fmt.Errorf("state 流程类型不匹配")
-	}
 	return pa, nil
+}
+
+// PendingIsBind 查询 state 对应的流程类型（不消费）。
+// 供 IdP 错误回跳（error 参数）时决定落点：绑定回个人资料页，登录回登录页。
+func (s *OIDCService) PendingIsBind(state string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pa, ok := s.pending[state]
+	return ok && pa.BindUserID != 0
 }
 
 // finishOIDC 回调公共段：code 换 token、验证 ID Token、提取 claims 并校验 claim 规则。

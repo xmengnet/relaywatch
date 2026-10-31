@@ -457,7 +457,7 @@ export default {
     providerDisabled: 'Disabled',
     providerName: 'Name',
     providerNameHint: 'Used for the sign-in button and URL, e.g. github, casdoor',
-    callback: 'Callback URL (set as the Redirect URI in your IdP):',
+    callback: 'Callback URL (shared by sign-in and account binding; set it as the Redirect URI in your IdP):',
     issuer: 'Issuer',
     issuerHint: 'IdP issuer URL; the server reads {issuer}/.well-known/openid-configuration to discover endpoints',
     clientId: 'Client ID',
