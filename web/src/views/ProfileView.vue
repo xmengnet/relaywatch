@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useLocale } from '@/composables/useLocale'
 import { useFormat } from '@/composables/useFormat'
-import { getProfile, updateProfile, changePassword, listSessions, revokeSession, unbindOIDC, type SessionInfo } from '@/api/users'
+import { getProfile, updateProfile, changePassword, listSessions, revokeSession, unbindOIDC, getBindPending, confirmOIDCBind, type SessionInfo } from '@/api/users'
 import { listOIDCProviders } from '@/api/import'
 import type { User } from '@/api/types'
 
@@ -34,6 +34,50 @@ const revoking = ref('')
 const oidcProvider = ref('')
 const hasPassword = ref(false)
 const idpList = ref<Array<{ name: string; icon_url?: string }>>([])
+
+// 绑定确认：IdP 回调只登记待确认项，回跳后由当前会话用户确认生效
+const bindConfirmInfo = ref<{ provider: string; identity: string } | null>(null)
+const bindConfirmToken = ref('')
+const confirmingBind = ref(false)
+
+async function consumeBindConfirm() {
+  const q = new URLSearchParams(location.search)
+  const token = q.get('bind_confirm')
+  if (!token) return
+  history.replaceState({}, '', location.pathname)
+  try {
+    bindConfirmInfo.value = await getBindPending(token)
+    bindConfirmToken.value = token
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error')
+  }
+}
+
+async function confirmBind() {
+  confirmingBind.value = true
+  try {
+    await confirmOIDCBind(bindConfirmToken.value)
+    toast(t('profile.oidcBindDone'))
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    confirmingBind.value = false
+    bindConfirmInfo.value = null
+    bindConfirmToken.value = ''
+    // 刷新绑定状态
+    try {
+      const r = await getProfile()
+      isOidc.value = r.oidc
+      oidcProvider.value = r.oidc_provider ?? ''
+      hasPassword.value = r.has_password ?? true
+    } catch { /* 忽略 */ }
+  }
+}
+
+function cancelBind() {
+  bindConfirmInfo.value = null
+  bindConfirmToken.value = ''
+}
 
 // 绑定流程经 IdP 302 回跳，带查询参数回报结果
 function consumeOidcQuery() {
@@ -72,6 +116,7 @@ onMounted(async () => {
   email.value = r.user.email ?? ''
   displayName.value = r.user.display_name ?? ''
   consumeOidcQuery()
+  consumeBindConfirm()
   try {
     // 登录页同款匿名列表：只含启用的 Provider（name/icon_url），够渲染绑定按钮
     idpList.value = (await listOIDCProviders()).items
@@ -98,6 +143,7 @@ async function unbind() {
 }
 
 async function saveProfile() {
+  if (savingProfile.value) return // Enter 可绕过按钮 loading 拦截
   const { valid } = await profileForm.value.validate()
   if (!valid) return
   savingProfile.value = true
@@ -114,6 +160,7 @@ async function saveProfile() {
 }
 
 async function savePassword() {
+  if (savingPassword.value) return
   const { valid } = await pwForm.value.validate()
   if (!valid) return
   savingPassword.value = true
@@ -160,7 +207,9 @@ async function kick(sess: SessionInfo) {
       </div>
       <v-form ref="profileForm" @submit.prevent="saveProfile">
         <v-text-field v-model="displayName" :label="t('profile.displayName')" class="mb-2" />
-        <v-text-field v-model="email" :label="t('profile.email')" type="email" class="mb-2" />
+        <v-text-field v-model="email" :label="t('profile.email')" type="email" class="mb-2"
+          :rules="[v => !v || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) || t('profile.invalidEmail')]"
+        />
         <div class="d-flex justify-end">
           <v-btn color="primary" :loading="savingProfile" @click="saveProfile">{{ t('common.save') }}</v-btn>
         </div>
@@ -201,25 +250,30 @@ async function kick(sess: SessionInfo) {
       />
     </v-card>
 
-    <v-card v-if="!isOidc" class="pa-6 mb-4" max-width="640">
-      <div class="text-subtitle-1 font-weight-medium mb-2">{{ t('profile.changePassword') }}</div>
-      <div class="text-body-2 text-medium-emphasis mb-4">{{ t('profile.passwordHint') }}</div>
+    <v-card class="pa-6 mb-4" max-width="640">
+      <div class="text-subtitle-1 font-weight-medium mb-2">
+        {{ hasPassword ? t('profile.changePassword') : t('profile.setPassword') }}
+      </div>
+      <div class="text-body-2 text-medium-emphasis mb-4">
+        {{ hasPassword ? t('profile.passwordHint') : (isOidc ? t('profile.setPasswordOidcHint') : t('profile.passwordHint')) }}
+      </div>
       <v-form ref="pwForm" @submit.prevent="savePassword">
-        <v-text-field v-model="oldPassword" :label="t('profile.currentPassword')" type="password" :rules="[v => !!v || t('profile.required')]" class="mb-2" />
+        <v-text-field
+          v-if="hasPassword" v-model="oldPassword" :label="t('profile.currentPassword')"
+          type="password" :rules="[v => !!v || t('profile.required')]" class="mb-2"
+        />
         <v-text-field v-model="newPassword" :label="t('profile.newPassword')" type="password" :rules="[v => (v && v.length >= 8) || t('common.atLeast8')]" class="mb-2" />
         <v-text-field
           v-model="newPassword2" :label="t('profile.confirmNewPassword')" type="password"
           :rules="[v => v === newPassword || t('profile.passwordMismatch')]" class="mb-2"
         />
         <div class="d-flex justify-end">
-          <v-btn color="primary" :loading="savingPassword" @click="savePassword">{{ t('profile.changePassword') }}</v-btn>
+          <v-btn color="primary" :loading="savingPassword" @click="savePassword">
+            {{ hasPassword ? t('profile.changePassword') : t('profile.setPassword') }}
+          </v-btn>
         </div>
       </v-form>
     </v-card>
-
-    <v-alert v-else class="mb-4" max-width="640" type="info" variant="tonal">
-      {{ t('profile.oidcPasswordHint') }}
-    </v-alert>
 
     <v-card class="pa-6" max-width="640">
       <div class="text-subtitle-1 font-weight-medium mb-2">{{ t('profile.sessions') }}</div>
@@ -247,5 +301,18 @@ async function kick(sess: SessionInfo) {
     <v-snackbar v-model="snackbar" :color="snackbarColor" location="top right" :timeout="4000">
       {{ snackbarText }}
     </v-snackbar>
+
+    <v-dialog :model-value="bindConfirmInfo !== null" persistent max-width="440">
+      <v-card class="pa-4" v-if="bindConfirmInfo">
+        <div class="text-subtitle-1 font-weight-medium mb-2">{{ t('profile.oidcConfirmTitle') }}</div>
+        <div class="text-body-2 text-medium-emphasis mb-4">
+          {{ t('profile.oidcConfirmText', { provider: bindConfirmInfo.provider, identity: bindConfirmInfo.identity }) }}
+        </div>
+        <div class="d-flex justify-end ga-2">
+          <v-btn variant="text" :disabled="confirmingBind" @click="cancelBind">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="primary" :loading="confirmingBind" @click="confirmBind">{{ t('profile.oidcConfirmOk') }}</v-btn>
+        </div>
+      </v-card>
+    </v-dialog>
   </div>
 </template>

@@ -47,9 +47,13 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function logout() {
-    await authApi.logout()
-    user.value = null
-    setCsrf('')
+    try {
+      await authApi.logout()
+    } finally {
+      // 网络失败也清本地状态：用户点登出就该离开，残留会话由服务端过期回收
+      user.value = null
+      setCsrf('')
+    }
   }
 
   async function register(username: string, password: string, email?: string, emailCode?: string) {

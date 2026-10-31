@@ -88,6 +88,7 @@ function onTypeChange(nextType: string) {
 }
 
 async function submit() {
+  if (saving.value) return // Enter 可绕过按钮 loading 拦截
   const { valid } = await form.value.validate()
   if (!valid) return
   saving.value = true
@@ -121,6 +122,10 @@ async function doTest(c: Channel) {
       ? t('channels.testSent', { name: c.name })
       : t('channels.testFailed', { error: r.error })
     snackbarColor.value = r.ok ? 'success' : 'error'
+    snackbar.value = true
+  } catch (e) {
+    snackbarText.value = e instanceof Error ? e.message : String(e)
+    snackbarColor.value = 'error'
     snackbar.value = true
   } finally {
     testing.value = null

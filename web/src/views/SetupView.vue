@@ -16,6 +16,7 @@ const loading = ref(false)
 const errorMsg = ref('')
 
 async function submit() {
+  if (loading.value) return // Enter 可绕过按钮 loading 拦截
   const { valid } = await form.value.validate()
   if (!valid) return
   if (password.value !== confirm.value) {

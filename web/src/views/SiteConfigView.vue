@@ -116,6 +116,7 @@ function addMirror() {
 }
 
 async function save() {
+  if (saving.value) return // Enter 可绕过按钮 loading 拦截
   saving.value = true
   try {
     await putSiteConfig({
@@ -218,6 +219,7 @@ async function editProvider(p: OIDCProviderInfo) {
 }
 
 async function saveProvider() {
+  if (savingProvider.value) return
   const { valid } = await pForm.value.validate()
   if (!valid) return
   savingProvider.value = true
@@ -244,8 +246,12 @@ async function saveProvider() {
 
 async function removeProvider(p: OIDCProviderInfo) {
   if (!p.id || !window.confirm(t('site.deleteProviderConfirm', { name: p.name }))) return
-  await deleteOIDCProvider(p.id)
-  providers.value = (await listAllOIDCProviders()).items
+  try {
+    await deleteOIDCProvider(p.id)
+    providers.value = (await listAllOIDCProviders()).items
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error')
+  }
 }
 
 async function copyCallback() {

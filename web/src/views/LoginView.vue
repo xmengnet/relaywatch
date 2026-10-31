@@ -75,6 +75,7 @@ onMounted(async () => {
 })
 
 async function submit() {
+  if (loading.value) return // Enter 可绕过按钮 loading 拦截
   if (isRegister.value) {
     await submitRegister()
     return
@@ -113,6 +114,7 @@ async function sendCode() {
 }
 
 async function submitRegister() {
+  if (loading.value) return
   const { valid } = await regForm.value.validate()
   if (!valid) return
   loading.value = true

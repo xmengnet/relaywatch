@@ -52,7 +52,11 @@ function toggleTheme() {
 }
 
 async function doLogout() {
-  await auth.logout()
+  try {
+    await auth.logout()
+  } catch {
+    /* auth.logout 已保证本地状态清理，这里照常跳转 */
+  }
   router.push('/login')
 }
 </script>

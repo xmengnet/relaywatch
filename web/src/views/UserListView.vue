@@ -14,6 +14,9 @@ const items = ref<AdminUser[]>([])
 const total = ref(0)
 const search = ref('')
 const loading = ref(false)
+const page = ref(1)
+const itemsPerPage = ref(25)
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / itemsPerPage.value)))
 
 const snackbar = ref(false)
 const snackbarText = ref('')
@@ -60,7 +63,7 @@ const roleTitle = (role: string) => roleItems.value.find((r) => r.value === role
 async function load() {
   loading.value = true
   try {
-    const r = await listUsers({ q: search.value || undefined })
+    const r = await listUsers({ q: search.value || undefined, page: page.value, per_page: itemsPerPage.value })
     items.value = r.items
     total.value = r.total
   } catch (e) {
@@ -95,6 +98,7 @@ function touchPerms() {
 }
 
 async function save() {
+  if (saving.value) return // Enter 可绕过按钮 loading 拦截
   const { valid } = await form.value.validate()
   if (!valid) return
   saving.value = true
@@ -160,7 +164,8 @@ function toast(msg: string, color = 'success') {
       <v-spacer />
       <v-text-field
         v-model="search" density="compact" hide-details clearable :placeholder="t('users.search')"
-        prepend-inner-icon="mdi-magnify" max-width="260" class="me-2" @keyup.enter="load" @click:clear="load"
+        prepend-inner-icon="mdi-magnify" max-width="260" class="me-2"
+        @keyup.enter="page = 1; load()" @click:clear="page = 1; load()"
       />
       <v-btn color="primary" prepend-icon="mdi-plus" @click="openCreate">{{ t('users.new') }}</v-btn>
     </div>
@@ -213,6 +218,18 @@ function toast(msg: string, color = 'success') {
         </tbody>
       </v-table>
     </v-card>
+
+    <div class="d-flex align-center ga-4 mt-2">
+      <span class="text-body-2 text-medium-emphasis">{{ t('users.pageTotal', { n: total }) }}</span>
+      <v-spacer />
+      <v-pagination
+        v-model="page"
+        :length="pageCount"
+        :total-visible="7"
+        :disabled="loading"
+        @update:model-value="load"
+      />
+    </div>
 
     <v-dialog v-model="dialogOpen" max-width="520">
       <v-card class="pa-6">

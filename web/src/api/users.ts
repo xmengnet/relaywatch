@@ -48,6 +48,16 @@ export function changePassword(p: { old_password: string; new_password: string }
   return apiFetch<{ ok: boolean }>('/profile/password', { method: 'POST', body: JSON.stringify(p) })
 }
 
+// ---------- OIDC 绑定确认（回调回跳后由用户在页面上确认生效） ----------
+
+export function getBindPending(token: string) {
+  return apiFetch<{ provider: string; identity: string }>(`/auth/bind/pending?token=${encodeURIComponent(token)}`)
+}
+
+export function confirmOIDCBind(token: string) {
+  return apiFetch<{ ok: boolean }>('/auth/bind/confirm', { method: 'POST', body: JSON.stringify({ token }) })
+}
+
 export interface SessionInfo {
   id: string
   user_agent?: string

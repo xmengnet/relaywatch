@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { FieldSpec, SourceMeta } from '@/api/types'
 import { getSourceTypes } from '@/api/monitors'
@@ -26,17 +26,20 @@ onMounted(async () => {
   types.value = (await getSourceTypes()).items
 })
 
-// 切换类型时保留同名字段值
-watch(() => props.sourceType, (next, prev) => {
-  if (!prev || !next) return
-  const nextFields = types.value.find(t => t.type === next)?.fields ?? []
+// 切换类型时保留同名字段值。不走 watch(sourceType)：编辑页 getMonitor 回填
+// source_type 也会触发 watch，而此时类型列表可能尚未加载（nextFields=[]），
+// 会把已加载的 source_config 竞态清空。改为仅由用户在类型选择器上显式触发。
+function onTypeChange(next: string) {
+  emit('update:sourceType', next)
+  const nextFields = types.value.find(t => t.type === next)?.fields
+  if (!next || next === props.sourceType || !nextFields) return
   const keep: Record<string, unknown> = {}
   for (const f of nextFields) {
     if (f.key in props.modelValue) keep[f.key] = props.modelValue[f.key]
     else if (f.default !== undefined) keep[f.key] = f.default
   }
   emit('update:modelValue', keep)
-})
+}
 
 function setField(key: string, value: unknown) {
   emit('update:modelValue', { ...props.modelValue, [key]: value })
@@ -59,7 +62,7 @@ function fieldRules(f: FieldSpec) {
     item-value="value"
     :label="t('monitors.edit.sourceType')"
     :prepend-inner-icon="current?.icon"
-    @update:model-value="$emit('update:sourceType', $event)"
+    @update:model-value="onTypeChange"
   />
 
   <template v-for="f in fields" :key="f.key">

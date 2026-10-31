@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import SourceConfigForm from '@/components/SourceConfigForm.vue'
 import { createMonitor, getMonitor, listMonitors, updateMonitor, type MonitorPayload } from '@/api/monitors'
+import type { Monitor } from '@/api/types'
 import { listChannels, type Channel } from '@/api/channels'
 
 const { t } = useI18n()
@@ -52,19 +53,33 @@ function parseTags(): string[] {
   return tagsText.value.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean)
 }
 
+// 参考监控候选：后端钳制 per_page≤100，固定大值会被静默截断，逐页拉全
+async function loadReferenceOptions() {
+  const currentId = route.params.id ? Number(route.params.id) : null
+  const valid: Monitor[] = []
+  try {
+    let fetched = 0
+    for (let page = 1; ; page++) {
+      const r = await listMonitors({ page, per_page: 100 })
+      fetched += r.items.length
+      valid.push(...r.items.filter(item => item.id !== currentId && !item.reference_monitor_id))
+      if (r.items.length === 0 || fetched >= r.total) break
+    }
+  } catch {
+    /* 拉取失败时下拉为空，不阻塞表单 */
+  }
+  referenceOptions.value = [
+    { title: t('monitors.edit.noReference'), value: null },
+    ...valid.map(item => ({
+      title: `${item.name} (${item.source_type})`,
+      value: item.id,
+    })),
+  ]
+}
+
 onMounted(async () => {
   listChannels().then(r => { allChannels.value = r.items })
-  listMonitors({ per_page: 200 }).then(r => {
-    const currentId = route.params.id ? Number(route.params.id) : null
-    const valid = r.items.filter(item => item.id !== currentId && !item.reference_monitor_id)
-    referenceOptions.value = [
-      { title: t('monitors.edit.noReference'), value: null },
-      ...valid.map(item => ({
-        title: `${item.name} (${item.source_type})`,
-        value: item.id,
-      })),
-    ]
-  })
+  loadReferenceOptions()
   if (isEdit.value) {
     const m = await getMonitor(route.params.id as string)
     // 后端可能返回 JSON 字符串（旧版本）或对象，统一归一化为对象
@@ -97,6 +112,7 @@ onMounted(async () => {
 })
 
 async function submit() {
+  if (saving.value) return // Enter 键可绕过按钮 loading 的 pointer-events 拦截
   const { valid } = await form.value.validate()
   if (!valid) return
   saving.value = true

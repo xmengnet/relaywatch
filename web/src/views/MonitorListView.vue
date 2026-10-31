@@ -30,6 +30,15 @@ const compareFilter = ref('')
 const selected = ref<Monitor[]>([])
 const checkingIds = ref<Set<number>>(new Set())
 
+const snackbar = ref(false)
+const snackbarText = ref('')
+const snackbarColor = ref('success')
+function toast(msg: string, color = 'success') {
+  snackbarText.value = msg
+  snackbarColor.value = color
+  snackbar.value = true
+}
+
 const { ensure: ensureSourceTypes, meta: sourceMeta } = useSourceTypes()
 onMounted(() => ensureSourceTypes())
 
@@ -72,7 +81,11 @@ const headers = computed(() => {
   return cols
 })
 
+// 乱序保护：搜索无防抖时代先发请求可能后返回并覆盖新结果；
+// 只有最新一次 load 的响应才允许落地
+let loadSeq = 0
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const r = await listMonitors({
@@ -84,10 +97,11 @@ async function load() {
       sort: sortBy.value[0]?.key,
       order: sortBy.value[0]?.order,
     })
+    if (seq !== loadSeq) return
     items.value = r.items
     total.value = r.total
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -98,14 +112,29 @@ watch(() => route.query, (q) => {
   search.value = (q.q as string) || ''
 }, { immediate: true })
 
-watch([stateFilter, compareFilter, search], () => {
+function syncQuery() {
   router.replace({ query: {
     state: stateFilter.value || undefined,
     compare: compareFilter.value || undefined,
     q: search.value || undefined,
   } })
+}
+
+watch([stateFilter, compareFilter], () => {
+  syncQuery()
   page.value = 1
   load()
+})
+
+// 搜索逐键输入：300ms 防抖后再请求（配合 loadSeq 乱序保护）
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+watch(search, () => {
+  syncQuery()
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    page.value = 1
+    load()
+  }, 300)
 })
 
 // SSE 实时更新：后台调度或手动检查完成时实时刷新列表
@@ -124,9 +153,13 @@ async function doBatch(action: string) {
   const ids = selected.value.map(m => m.id)
   if (!ids.length) return
   if (action === 'delete' && !window.confirm(t('monitors.deleteConfirm', { n: ids.length }))) return
-  await batchMonitors(action, ids)
-  selected.value = []
-  await load()
+  try {
+    await batchMonitors(action, ids)
+    selected.value = []
+    await load()
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error')
+  }
 }
 
 async function rowCheck(m: Monitor) {
@@ -134,6 +167,8 @@ async function rowCheck(m: Monitor) {
   try {
     await checkNow(m.id)
     await load()
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error')
   } finally {
     checkingIds.value.delete(m.id)
   }
@@ -283,5 +318,9 @@ const hasSelected = computed(() => selected.value.length > 0)
         </div>
       </template>
     </v-data-table-server>
+
+    <v-snackbar v-model="snackbar" :color="snackbarColor" location="top right" :timeout="4000">
+      {{ snackbarText }}
+    </v-snackbar>
   </div>
 </template>

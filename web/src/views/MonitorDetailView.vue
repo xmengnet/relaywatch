@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import StatusChip from '@/components/StatusChip.vue'
@@ -43,6 +43,12 @@ const canAck = computed(() => monitor.value?.state === 'has_update')
 
 onMounted(async () => {
   await reload()
+})
+
+// 同路由组件复用（如「参照监控」链接从 /monitors/1 跳 /monitors/2）：
+// onMounted 不会重跑，必须 watch 路由参数否则整页显示旧监控
+watch(id, () => {
+  reload()
 })
 
 async function reload() {
@@ -97,6 +103,10 @@ async function doAck() {
     snackbarColor.value = 'success'
     snackbar.value = true
     await reload()
+  } catch (e) {
+    snackbarText.value = e instanceof Error ? e.message : String(e)
+    snackbarColor.value = 'error'
+    snackbar.value = true
   } finally {
     acking.value = false
   }
@@ -104,8 +114,14 @@ async function doAck() {
 
 async function doDelete() {
   if (!window.confirm(t('monitors.detail.deleteConfirm', { name: monitor.value?.name }))) return
-  await import('@/api/monitors').then(m => m.deleteMonitor(id.value))
-  router.push('/monitors')
+  try {
+    await import('@/api/monitors').then(m => m.deleteMonitor(id.value))
+    router.push('/monitors')
+  } catch (e) {
+    snackbarText.value = e instanceof Error ? e.message : String(e)
+    snackbarColor.value = 'error'
+    snackbar.value = true
+  }
 }
 </script>
 
