@@ -24,6 +24,7 @@ func (h *ProfileHandler) routes(r chiRouterIface) {
 	r.Post("/profile/password", h.changePassword)
 	r.Get("/profile/sessions", h.sessions)
 	r.Delete("/profile/sessions/{id}", h.revokeSession)
+	r.Delete("/profile/oidc", h.unbindOIDC)
 }
 
 func (h *ProfileHandler) get(w http.ResponseWriter, r *http.Request) {
@@ -34,11 +35,37 @@ func (h *ProfileHandler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{
-		"user":     toUserResponse(got),
-		"oidc":     got.OIDCProvider != "", // OIDC-only 账户不可设密码
-		"has_ldap": false,
+		"user":          toUserResponse(got),
+		"oidc":          got.OIDCProvider != "", // OIDC-only 账户不可设密码
+		"oidc_provider": got.OIDCProvider,       // 绑定的 IdP 名，未绑定为空
+		"has_password":  len(got.PasswordHash) > 0,
+		"has_ldap":      false,
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// unbindOIDC DELETE /profile/oidc：解除当前用户的 OIDC 绑定。
+// 未设本地密码的纯 OIDC 账户拒绝解绑，避免解绑后失去唯一登录方式。
+func (h *ProfileHandler) unbindOIDC(w http.ResponseWriter, r *http.Request) {
+	u := authUser(r)
+	got, err := h.St.UserByID(r.Context(), u.ID)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if got.OIDCProvider == "" {
+		writeError(w, http.StatusBadRequest, "尚未绑定 OIDC 账号")
+		return
+	}
+	if len(got.PasswordHash) == 0 {
+		writeError(w, http.StatusBadRequest, "该账户未设置本地密码，请先在「安全」中设置密码再解绑")
+		return
+	}
+	if err := h.St.UnbindOIDCUser(r.Context(), got.ID); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (h *ProfileHandler) update(w http.ResponseWriter, r *http.Request) {

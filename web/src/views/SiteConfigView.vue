@@ -353,6 +353,7 @@ async function copyCallback() {
         <v-spacer />
         <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="openProvider">{{ t('site.addProvider') }}</v-btn>
       </div>
+      <div class="text-caption text-medium-emphasis mb-3">{{ t('site.oidcAutoProvisionHint') }}</div>
       <v-list v-if="providers.length" density="compact">
         <v-list-item v-for="p in providers" :key="p.id ?? p.name">
           <v-list-item-title class="font-weight-medium">

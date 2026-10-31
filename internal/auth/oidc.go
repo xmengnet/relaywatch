@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,6 +16,12 @@ import (
 
 	"relaywatch/internal/store"
 )
+
+// OIDC 流程错误：
+//   - ErrOIDCNotBound：IdP 身份未绑定任何用户，且注册已关闭（不能自动建号）。
+//   - ErrOIDCTaken：IdP 身份已被其他用户绑定。
+var ErrOIDCNotBound = errors.New("该 IdP 账号未绑定系统用户，且注册已关闭")
+var ErrOIDCTaken = errors.New("该 IdP 账号已绑定其他用户")
 
 // OIDCService OIDC 授权码流 + PKCE。
 type OIDCService struct {
@@ -30,6 +37,7 @@ type OIDCService struct {
 type pendingAuth struct {
 	ProviderName string
 	Verifier     string // PKCE code_verifier
+	BindUserID   int64  // 非 0 = 绑定流程：回调后把 IdP 身份绑到该用户，而非建会话
 	CreatedAt    time.Time
 }
 
@@ -47,8 +55,17 @@ func NewOIDCService(st store.Store, sessionTTL time.Duration, baseURL string) *O
 	}
 }
 
-// Begin 生成 state 与 PKCE verifier，返回 IdP 授权页 URL。
+// Begin 生成 state 与 PKCE verifier，返回 IdP 授权页 URL（登录流程）。
 func (s *OIDCService) Begin(ctx context.Context, providerName string) (redirectURL string, err error) {
+	return s.begin(ctx, providerName, 0)
+}
+
+// BeginBind 绑定流程入口：已登录用户跳转 IdP，回调后把 IdP 身份绑到该用户而非建会话。
+func (s *OIDCService) BeginBind(ctx context.Context, providerName string, userID int64) (redirectURL string, err error) {
+	return s.begin(ctx, providerName, userID)
+}
+
+func (s *OIDCService) begin(ctx context.Context, providerName string, bindUserID int64) (string, error) {
 	p, err := s.Store.OIDCProviderByName(ctx, providerName)
 	if err == store.ErrNotFound {
 		return "", fmt.Errorf("OIDC provider %q 不存在", providerName)
@@ -73,14 +90,18 @@ func (s *OIDCService) Begin(ctx context.Context, providerName string) (redirectU
 			delete(s.pending, k)
 		}
 	}
-	s.pending[state] = &pendingAuth{ProviderName: providerName, Verifier: verifier, CreatedAt: time.Now()}
+	s.pending[state] = &pendingAuth{ProviderName: providerName, Verifier: verifier, BindUserID: bindUserID, CreatedAt: time.Now()}
 	s.mu.Unlock()
 
+	redirectPath := "/auth/oidc/" + providerName + "/callback"
+	if bindUserID != 0 {
+		redirectPath = "/auth/oidc/" + providerName + "/bind/callback"
+	}
 	oc := oauth2.Config{
 		ClientID:     p.ClientID,
 		ClientSecret: p.ClientSecret,
 		Endpoint:     prov.Endpoint(),
-		RedirectURL:  s.BaseURL + "/auth/oidc/" + providerName + "/callback",
+		RedirectURL:  s.BaseURL + redirectPath,
 		Scopes:       strings.Fields(p.Scopes),
 	}
 	url := oc.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))
@@ -94,70 +115,35 @@ type OIDCUser struct {
 	Email   string
 }
 
-// Complete 处理回调：校验 state、换 token、验证 ID Token、检查 claim 规则。
+// Complete 处理登录回调：校验 state、换 token、验证 ID Token、检查 claim 规则。
+// 未绑定的 IdP 身份仅在注册开启时自动建号（与本地注册共用 registration.enabled 开关），
+// 否则返回 ErrOIDCNotBound，引导用户先在「个人资料」完成绑定。
 func (s *OIDCService) Complete(ctx context.Context, providerName, state, code string) (*store.User, error) {
-	s.mu.Lock()
-	pa, ok := s.pending[state]
-	if ok {
-		delete(s.pending, state) // state 一次性，无论后续校验是否通过
+	pa, err := s.takePending(providerName, state, false)
+	if err != nil {
+		return nil, err
 	}
-	s.mu.Unlock()
-	if !ok || pa.ProviderName != providerName || time.Since(pa.CreatedAt) > pendingAuthTTL {
-		return nil, fmt.Errorf("state 无效或已过期")
-	}
-
 	p, err := s.Store.OIDCProviderByName(ctx, providerName)
 	if err != nil {
 		return nil, err
 	}
-	prov, err := oidc.NewProvider(ctx, normalizeIssuer(p.Issuer))
+	claims, err := s.finishOIDC(ctx, p, code, pa.Verifier)
 	if err != nil {
-		return nil, fmt.Errorf("发现 IdP 配置失败: %w", err)
-	}
-	oc := oauth2.Config{
-		ClientID:     p.ClientID,
-		ClientSecret: p.ClientSecret,
-		Endpoint:     prov.Endpoint(),
-		RedirectURL:  s.BaseURL + "/auth/oidc/" + providerName + "/callback",
-		Scopes:       strings.Fields(p.Scopes),
-	}
-	tok, err := oc.Exchange(ctx, code, oauth2.VerifierOption(pa.Verifier))
-	if err != nil {
-		return nil, fmt.Errorf("code 换 token 失败: %w", err)
-	}
-	rawID, ok := tok.Extra("id_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("IdP 未返回 id_token")
-	}
-	verifier := prov.Verifier(&oidc.Config{ClientID: p.ClientID})
-	idToken, err := verifier.Verify(ctx, rawID)
-	if err != nil {
-		return nil, fmt.Errorf("id_token 校验失败: %w", err)
-	}
-	var claims struct {
-		Sub   string         `json:"sub"`
-		Name  string         `json:"name"`
-		Email string         `json:"email"`
-		Other map[string]any `json:"-"`
-	}
-	if err := idToken.Claims(&claims); err != nil {
-		return nil, err
-	}
-
-	// claim 规则
-	if err := checkClaimRules(p.ClaimRules, claims.Email, idToken); err != nil {
 		return nil, err
 	}
 
 	// 查找或创建用户
-	u, err := s.Store.UserByOIDC(ctx, p.Name, claims.Sub)
-	if err == store.ErrNotFound {
+	u, err := s.Store.UserByOIDC(ctx, p.Name, claims.Subject)
+	if errors.Is(err, store.ErrNotFound) {
+		if !s.autoProvisionAllowed(ctx) {
+			return nil, ErrOIDCNotBound
+		}
 		u = &store.User{
-			Username:     firstNonEmpty(claims.Name, claims.Email, claims.Sub),
+			Username:     firstNonEmpty(claims.Name, claims.Email, claims.Subject),
 			Email:        claims.Email,
 			Role:         s.defaultOIDCRole(ctx), // 系统设置 oidc.default_role，默认 viewer
 			OIDCProvider: p.Name,
-			OIDCSubject:  claims.Sub,
+			OIDCSubject:  claims.Subject,
 		}
 		if err := s.Store.CreateUser(ctx, u); err != nil {
 			return nil, err
@@ -172,6 +158,97 @@ func (s *OIDCService) Complete(ctx context.Context, providerName, state, code st
 		return nil, err
 	}
 	return u, nil
+}
+
+// CompleteBind 处理绑定回调：把 IdP 身份绑到发起绑定的用户上，返回绑定的 provider 名。
+// 该 IdP 身份已被其他用户绑定时返回 ErrOIDCTaken；重复绑定自己视为成功（幂等）。
+func (s *OIDCService) CompleteBind(ctx context.Context, providerName, state, code string) (string, error) {
+	pa, err := s.takePending(providerName, state, true)
+	if err != nil {
+		return "", err
+	}
+	p, err := s.Store.OIDCProviderByName(ctx, providerName)
+	if err != nil {
+		return "", err
+	}
+	claims, err := s.finishOIDC(ctx, p, code, pa.Verifier)
+	if err != nil {
+		return "", err
+	}
+	existing, err := s.Store.UserByOIDC(ctx, p.Name, claims.Subject)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return "", err
+	}
+	if existing != nil && existing.ID != pa.BindUserID {
+		return "", ErrOIDCTaken
+	}
+	if existing == nil {
+		if err := s.Store.SetUserOIDC(ctx, pa.BindUserID, p.Name, claims.Subject); err != nil {
+			return "", err
+		}
+	}
+	return p.Name, nil
+}
+
+// takePending 取出并删除一次性 state；bind 流程要求 BindUserID 非 0，登录流程要求为 0。
+func (s *OIDCService) takePending(providerName, state string, wantBind bool) (*pendingAuth, error) {
+	s.mu.Lock()
+	pa, ok := s.pending[state]
+	if ok {
+		delete(s.pending, state) // state 一次性，无论后续校验是否通过
+	}
+	s.mu.Unlock()
+	if !ok || pa.ProviderName != providerName || time.Since(pa.CreatedAt) > pendingAuthTTL {
+		return nil, fmt.Errorf("state 无效或已过期")
+	}
+	if wantBind != (pa.BindUserID != 0) {
+		return nil, fmt.Errorf("state 流程类型不匹配")
+	}
+	return pa, nil
+}
+
+// finishOIDC 回调公共段：code 换 token、验证 ID Token、提取 claims 并校验 claim 规则。
+func (s *OIDCService) finishOIDC(ctx context.Context, p *store.OIDCProvider, code, verifier string) (*OIDCUser, error) {
+	prov, err := oidc.NewProvider(ctx, normalizeIssuer(p.Issuer))
+	if err != nil {
+		return nil, fmt.Errorf("发现 IdP 配置失败: %w", err)
+	}
+	oc := oauth2.Config{
+		ClientID:     p.ClientID,
+		ClientSecret: p.ClientSecret,
+		Endpoint:     prov.Endpoint(),
+		Scopes:       strings.Fields(p.Scopes),
+	}
+	tok, err := oc.Exchange(ctx, code, oauth2.VerifierOption(verifier))
+	if err != nil {
+		return nil, fmt.Errorf("code 换 token 失败: %w", err)
+	}
+	rawID, ok := tok.Extra("id_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("IdP 未返回 id_token")
+	}
+	idToken, err := prov.Verifier(&oidc.Config{ClientID: p.ClientID}).Verify(ctx, rawID)
+	if err != nil {
+		return nil, fmt.Errorf("id_token 校验失败: %w", err)
+	}
+	var c struct {
+		Subject string `json:"sub"`
+		Name    string `json:"name"`
+		Email   string `json:"email"`
+	}
+	if err := idToken.Claims(&c); err != nil {
+		return nil, err
+	}
+	if err := checkClaimRules(p.ClaimRules, c.Email, idToken); err != nil {
+		return nil, err
+	}
+	return &OIDCUser{Subject: c.Subject, Name: c.Name, Email: c.Email}, nil
+}
+
+// autoProvisionAllowed OIDC 首次登录自动建号与本地注册共用 registration.enabled 开关。
+func (s *OIDCService) autoProvisionAllowed(ctx context.Context) bool {
+	v, err := s.Store.GetSetting(ctx, "registration.enabled")
+	return err == nil && v == "true"
 }
 
 // defaultOIDCRole 读取 OIDC 首次登录自动建号的默认角色设置；非法或缺省回 viewer。

@@ -56,9 +56,16 @@ function onIconError(name: string) {
   failedIcons.value = new Set(failedIcons.value)
 }
 
+// OIDC 回调带回的错误码 → 文案；未知码统一走通用失败文案
+const OIDC_ERROR_KEYS: Record<string, string> = {
+  oidc_failed: 'auth.oidcFailed',
+  oidc_unbound: 'auth.oidcUnbound',
+}
+
 onMounted(async () => {
   if (route.query.error) {
-    errorMsg.value = t('auth.oidcFailed')
+    const code = String(route.query.error)
+    errorMsg.value = t(OIDC_ERROR_KEYS[code] ?? 'auth.oidcFailed')
   }
   try {
     oidcProviders.value = (await listOIDCProviders()).items

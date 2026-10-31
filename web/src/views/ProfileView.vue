@@ -4,7 +4,8 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useLocale } from '@/composables/useLocale'
 import { useFormat } from '@/composables/useFormat'
-import { getProfile, updateProfile, changePassword, listSessions, revokeSession, type SessionInfo } from '@/api/users'
+import { getProfile, updateProfile, changePassword, listSessions, revokeSession, unbindOIDC, type SessionInfo } from '@/api/users'
+import { listOIDCProviders } from '@/api/import'
 import type { User } from '@/api/types'
 
 const { t } = useI18n()
@@ -29,6 +30,21 @@ const profileForm = ref()
 const sessions = ref<SessionInfo[]>([])
 const revoking = ref('')
 
+// OIDC 绑定
+const oidcProvider = ref('')
+const hasPassword = ref(false)
+const idpList = ref<Array<{ name: string; icon_url?: string }>>([])
+
+// 绑定流程经 IdP 302 回跳，带查询参数回报结果
+function consumeOidcQuery() {
+  const q = new URLSearchParams(location.search)
+  if (q.get('oidc_bound')) toast(t('profile.oidcBindDone'))
+  else if (q.get('oidc_error') === 'bind_taken') toast(t('profile.oidcBindTaken'), 'error')
+  else if (q.get('oidc_error')) toast(t('profile.oidcBindFailed'), 'error')
+  else return
+  history.replaceState({}, '', location.pathname)
+}
+
 const snackbar = ref(false)
 const snackbarText = ref('')
 const snackbarColor = ref('success')
@@ -51,10 +67,35 @@ onMounted(async () => {
   const r = await getProfile()
   user.value = r.user
   isOidc.value = r.oidc
+  oidcProvider.value = r.oidc_provider ?? ''
+  hasPassword.value = r.has_password ?? true
   email.value = r.user.email ?? ''
   displayName.value = r.user.display_name ?? ''
+  consumeOidcQuery()
+  try {
+    // 登录页同款匿名列表：只含启用的 Provider（name/icon_url），够渲染绑定按钮
+    idpList.value = (await listOIDCProviders()).items
+  } catch {
+    /* 匿名列表不可用时仅隐藏绑定入口 */
+  }
   await loadSessions()
 })
+
+function bindProvider(name: string) {
+  location.href = `/auth/oidc/${encodeURIComponent(name)}/bind`
+}
+
+async function unbind() {
+  if (!window.confirm(t('profile.oidcUnbindConfirm', { name: oidcProvider.value }))) return
+  try {
+    await unbindOIDC()
+    oidcProvider.value = ''
+    isOidc.value = false
+    toast(t('profile.oidcUnbindDone'))
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error')
+  }
+}
 
 async function saveProfile() {
   const { valid } = await profileForm.value.validate()
@@ -124,6 +165,26 @@ async function kick(sess: SessionInfo) {
           <v-btn color="primary" :loading="savingProfile" @click="saveProfile">{{ t('common.save') }}</v-btn>
         </div>
       </v-form>
+    </v-card>
+
+    <v-card class="pa-6 mb-4" max-width="640">
+      <div class="text-subtitle-1 font-weight-medium mb-2">{{ t('profile.oidcBindTitle') }}</div>
+      <div class="text-body-2 text-medium-emphasis mb-4">{{ t('profile.oidcBindHint') }}</div>
+      <div v-if="oidcProvider" class="d-flex align-center ga-2">
+        <v-chip prepend-icon="mdi-key-chain" variant="tonal">{{ t('profile.oidcBoundTo', { name: oidcProvider }) }}</v-chip>
+        <v-spacer />
+        <v-btn variant="text" color="error" :disabled="!hasPassword" @click="unbind">{{ t('profile.oidcUnbind') }}</v-btn>
+      </div>
+      <div v-else class="d-flex ga-2 flex-wrap align-center">
+        <v-btn
+          v-for="p in idpList" :key="p.name" variant="tonal" color="primary"
+          prepend-icon="mdi-link-variant" @click="bindProvider(p.name)"
+        >{{ t('profile.oidcBindTo', { name: p.name }) }}</v-btn>
+        <span v-if="!idpList.length" class="text-body-2 text-medium-emphasis">{{ t('profile.oidcNoProviders') }}</span>
+      </div>
+      <v-alert v-if="oidcProvider && !hasPassword" type="info" density="compact" variant="tonal" class="mt-3">
+        {{ t('profile.oidcUnbindNeedPassword') }}
+      </v-alert>
     </v-card>
 
     <v-card class="pa-6 mb-4" max-width="640">

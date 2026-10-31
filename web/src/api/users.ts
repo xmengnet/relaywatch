@@ -32,7 +32,12 @@ export function deleteUser(id: number) {
 // ---------- 个人资料（所有角色） ----------
 
 export function getProfile() {
-  return apiFetch<{ user: User; oidc: boolean }>('/profile')
+  return apiFetch<{ user: User; oidc: boolean; oidc_provider?: string; has_password?: boolean }>('/profile')
+}
+
+// 解绑当前用户的 OIDC 身份（未设本地密码的纯 OIDC 账户会被后端拒绝）
+export function unbindOIDC() {
+  return apiFetch<{ ok: boolean }>('/profile/oidc', { method: 'DELETE' })
 }
 
 export function updateProfile(p: { email?: string; display_name?: string }) {

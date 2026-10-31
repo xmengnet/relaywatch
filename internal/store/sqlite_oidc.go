@@ -102,8 +102,16 @@ func (s *sqliteStore) UserByOIDC(ctx context.Context, provider, subject string) 
 	})
 }
 
-// SetUserOIDC 绑定 OIDC 身份（首次登录自动创建时用）。
+// SetUserOIDC 绑定 OIDC 身份（首次登录自动创建与「个人资料」绑定时用）。
+// 唯一性由 users 表的 UNIQUE (oidc_provider, oidc_subject) 兜底。
 func (s *sqliteStore) SetUserOIDC(ctx context.Context, userID int64, provider, subject string) error {
 	_, err := s.db.exec(ctx, `UPDATE users SET oidc_provider = ?, oidc_subject = ? WHERE id = ?`, provider, subject, userID)
+	return err
+}
+
+// UnbindOIDCUser 解绑 OIDC 身份。置 NULL 而非空串：空串是非 NULL 值，
+// 两个未绑定用户都会落 (” , ”) 而违反 UNIQUE 约束，NULL 互不冲突。
+func (s *sqliteStore) UnbindOIDCUser(ctx context.Context, userID int64) error {
+	_, err := s.db.exec(ctx, `UPDATE users SET oidc_provider = NULL, oidc_subject = NULL WHERE id = ?`, userID)
 	return err
 }

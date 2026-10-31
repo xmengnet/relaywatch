@@ -136,6 +136,7 @@ type Store interface {
 	DeleteOIDCProvider(ctx context.Context, id int64) error
 	UserByOIDC(ctx context.Context, provider, subject string) (*User, error)
 	SetUserOIDC(ctx context.Context, userID int64, provider, subject string) error
+	UnbindOIDCUser(ctx context.Context, userID int64) error
 }
 
 // Open 打开（或创建）SQLite 数据库并应用 PRAGMA。
