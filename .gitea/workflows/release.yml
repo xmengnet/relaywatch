@@ -85,7 +85,7 @@ jobs:
           pkgname = relaywatch
           pkgver = ${PKGVER}-1
           pkgdesc = Self-hosted version update monitoring service
-          url = https://git.liyp.cc/xmengnet/relaywatch
+          url = https://github.com/xmengnet/relaywatch
           packager = liyp <my@liyp.cc>
           arch = x86_64
           depend = ca-certificates

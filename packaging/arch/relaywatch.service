@@ -1,6 +1,6 @@
 [Unit]
 Description=RelayWatch 版本更新监控
-Documentation=https://git.liyp.cc/xmengnet/relaywatch
+Documentation=https://github.com/xmengnet/relaywatch
 After=network-online.target
 Wants=network-online.target
 
