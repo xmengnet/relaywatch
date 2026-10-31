@@ -56,6 +56,39 @@ func TestRegistrationCodeLifecycle(t *testing.T) {
 	}
 }
 
+// 错误尝试计数：累计、新码重置、按邮箱作废。
+func TestRegistrationCodeAttempts(t *testing.T) {
+	s, ctx := newMultiUserStore(t)
+	now := time.Now()
+	if err := s.PutRegistrationCode(ctx, "bf@example.com", "123456", now.Add(10*time.Minute), now); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 5; i++ {
+		n, err := s.BumpRegistrationCodeAttempts(ctx, "bf@example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != i {
+			t.Fatalf("attempts = %d, want %d", n, i)
+		}
+	}
+	// 重发新码重置计数
+	if err := s.PutRegistrationCode(ctx, "bf@example.com", "654321", now.Add(10*time.Minute), now); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok, err := s.GetRegistrationCode(ctx, "bf@example.com")
+	if err != nil || !ok || rec.Attempts != 0 {
+		t.Fatalf("after resend attempts = %+v ok=%v err=%v, want fresh 0", rec, ok, err)
+	}
+	// 作废
+	if err := s.DeleteRegistrationCode(ctx, "bf@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.GetRegistrationCode(ctx, "bf@example.com"); ok {
+		t.Fatal("code should be deleted")
+	}
+}
+
 // 过期清理只删过期行，不影响有效记录。
 func TestSweepRegistrationCodes(t *testing.T) {
 	s, ctx := newMultiUserStore(t)

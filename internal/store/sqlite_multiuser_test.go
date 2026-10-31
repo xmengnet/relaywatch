@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"encoding/base64"
 	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
+
+	"relaywatch/internal/crypto"
 )
 
 func newMultiUserStore(t *testing.T) (*sqliteStore, context.Context) {
@@ -226,6 +229,78 @@ func TestDeleteUserTransferResources(t *testing.T) {
 	}
 	if _, err := s.APITokenByHash(ctx, "hash-1"); err != ErrNotFound {
 		t.Errorf("token should be gone, err = %v", err)
+	}
+}
+
+// 回归：audit_log.user_id / version_changes.acknowledged_by 的外键无 ON DELETE，
+// 有审计记录或 ack 过版本的用户删除时违反外键约束，整个事务回滚 500。
+func TestDeleteUserWithAuditAndAck(t *testing.T) {
+	s, ctx := newMultiUserStore(t)
+	alice := mustUser(t, s, ctx, "alice", "user", false)
+	admin := mustUser(t, s, ctx, "admin", "admin", false)
+
+	ma := mustMonitor(t, s, ctx, "alice-mon", alice.ID)
+	aliceID := alice.ID
+	if err := s.AddAudit(ctx, &AuditEntry{UserID: &aliceID, Action: "profile.password_change", IP: "1.2.3.4"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := s.AddVersionChange(ctx, &VersionChange{
+		MonitorID: ma.ID, NewVersion: "2.0", DetectedAt: now,
+		AcknowledgedAt: &now, AcknowledgedBy: &aliceID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.DeleteUserTransferResources(ctx, alice.ID, admin.ID); err != nil {
+		t.Fatalf("DeleteUserTransferResources: %v", err)
+	}
+	if _, err := s.UserByID(ctx, alice.ID); err != ErrNotFound {
+		t.Errorf("user should be deleted, err = %v", err)
+	}
+	if _, err := s.OpenVersionChange(ctx, ma.ID); err == nil {
+		t.Errorf("acked change should not be open")
+	}
+}
+
+// 回归：source_config 落库为密文（启用 SecretBox），SQL LIKE 对密文永远搜不到。
+// 搜索改为解密后内存过滤，按 config 内容也能命中。
+func TestListMonitorsSearchEncryptedConfig(t *testing.T) {
+	s, ctx := newMultiUserStore(t)
+	// 32 字节随机 key 的 base64（crypto.NewBox 要求）
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	box, err := crypto.NewBox(key, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetSecretBox(box)
+
+	u := mustUser(t, s, ctx, "alice", "user", false)
+	mustMonitor(t, s, ctx, "yazi-nightly", u.ID) // config {"version":"1.0.0"}
+	other := &Monitor{Name: "plain", SourceType: "manual", SourceConfig: `{"version":"9.9.9"}`, IntervalSec: 300, Enabled: true, State: StateUnknown, OwnerID: u.ID}
+	if err := s.CreateMonitor(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+
+	// 按 config 内容搜（加密下此前永远搜不到）
+	items, total, err := s.ListMonitors(ctx, MonitorFilter{OwnerID: u.ID, Search: "9.9.9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(items) != 1 || items[0].ID != other.ID {
+		t.Errorf("search by config = total %d items %v, want plain monitor", total, items)
+	}
+	// 按名称搜
+	items, total, err = s.ListMonitors(ctx, MonitorFilter{OwnerID: u.ID, Search: "yazi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "yazi-nightly" {
+		t.Errorf("search by name = total %d items %v, want yazi-nightly", total, items)
+	}
+	// 无命中
+	if _, total, _ := s.ListMonitors(ctx, MonitorFilter{OwnerID: u.ID, Search: "nomatch"}); total != 0 {
+		t.Errorf("no-match search total = %d, want 0", total)
 	}
 }
 

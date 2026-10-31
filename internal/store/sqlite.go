@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -56,7 +57,8 @@ func (s *sqliteStore) encField(plain string) string {
 	}
 	enc, err := s.box.Encrypt(plain)
 	if err != nil {
-		// 加密失败不该阻塞保存——退回明文并留痕（生产日志在上层）
+		// 加密失败回退明文必须留痕：静默降级等于加密形同虚设且无人知晓
+		slog.Error("encField encrypt failed, storing plaintext", "err", err)
 		return plain
 	}
 	return enc

@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"relaywatch/internal/store"
 )
@@ -134,9 +135,11 @@ func TestEvaluator(t *testing.T) {
 		t.Fatalf("events = %v, want [%q]", events, EventEnteredLagging)
 	}
 
-	// 上游版本变大到 1.3.0，触发 EvaluateOnChecked
+	// 上游版本变大到 1.3.0（经检查结果通道落库，latest_version 不走 UpdateMonitor），触发 EvaluateOnChecked
 	ref.LatestVersion = "1.3.0"
-	_ = st.UpdateMonitor(ctx, ref)
+	_ = st.UpdateMonitorCheckResult(ctx, ref.ID, store.CheckResult{
+		State: ref.State, LatestVersion: "1.3.0", LastCheckedAt: time.Now(),
+	})
 	eval.EvaluateOnChecked(ctx, ref)
 
 	if len(events) != 2 || events[1] != EventGapGrew {
@@ -145,7 +148,9 @@ func TestEvaluator(t *testing.T) {
 
 	// 跟随监控更新追平到 1.3.0-1
 	follower.LatestVersion = "1.3.0-1"
-	_ = st.UpdateMonitor(ctx, follower)
+	_ = st.UpdateMonitorCheckResult(ctx, follower.ID, store.CheckResult{
+		State: follower.State, LatestVersion: "1.3.0-1", LastCheckedAt: time.Now(),
+	})
 	eval.EvaluateOnChecked(ctx, follower)
 
 	f2, _ := st.GetMonitor(ctx, follower.ID)

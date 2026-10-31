@@ -72,6 +72,11 @@ type Store interface {
 	// CountMonitorStates 仪表盘计数，按 ownerID 过滤（0 = 全量）。
 	CountMonitorStates(ctx context.Context, ownerID int64) (MonitorCounts, error)
 	ListEnabledMonitors(ctx context.Context) ([]*Monitor, error)
+	CountEnabledMonitors(ctx context.Context) (int64, error)
+	// 定向增量更新：避免读-改-写整行覆盖并发检查刚写入的状态
+	SetMonitorEnabled(ctx context.Context, id int64, enabled bool) error
+	SetMonitorBaseline(ctx context.Context, id int64, state *MonitorState, currentVersion *string) error
+	TouchMonitorNotified(ctx context.Context, id int64, at time.Time) error
 	UpdateMonitor(ctx context.Context, m *Monitor) error
 	DeleteMonitor(ctx context.Context, id int64) error
 	SetMonitorChannels(ctx context.Context, monitorID int64, channelIDs []int64) error
@@ -123,6 +128,8 @@ type Store interface {
 	SweepRegistrationCodes(ctx context.Context) error
 	GetRegistrationCode(ctx context.Context, email string) (*RegistrationCode, bool, error)
 	ConsumeRegistrationCode(ctx context.Context, email, code string, now time.Time) (bool, error)
+	BumpRegistrationCodeAttempts(ctx context.Context, email string) (int, error)
+	DeleteRegistrationCode(ctx context.Context, email string) error
 
 	// 审计
 	AddAudit(ctx context.Context, a *AuditEntry) error

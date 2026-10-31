@@ -2,13 +2,13 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
-
-	"database/sql"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -190,6 +190,10 @@ func (s *sqliteStore) DeleteUserTransferResources(ctx context.Context, userID, t
 	}{
 		{`UPDATE OR FAIL monitors SET owner_id = ? WHERE owner_id = ?`, []any{toUserID, userID}},
 		{`UPDATE OR FAIL channels SET owner_id = ? WHERE owner_id = ?`, []any{toUserID, userID}},
+		// 审计与 ack 记录保留历史，用户引用置 NULL（两列均可空且 FK 无 ON DELETE，
+		// 不清掉会让最后的 DELETE FROM users 违反外键约束回滚整个事务）
+		{`UPDATE audit_log SET user_id = NULL WHERE user_id = ?`, []any{userID}},
+		{`UPDATE version_changes SET acknowledged_by = NULL WHERE acknowledged_by = ?`, []any{userID}},
 		{`DELETE FROM sessions WHERE user_id = ?`, []any{userID}},
 		{`DELETE FROM api_tokens WHERE user_id = ?`, []any{userID}},
 		{`DELETE FROM users WHERE id = ?`, []any{userID}},
@@ -508,16 +512,17 @@ func (s *sqliteStore) ListMonitors(ctx context.Context, f MonitorFilter) ([]*Mon
 		where = append(where, "compare_state = ?")
 		args = append(args, f.CompareState)
 	}
-	if f.Search != "" {
-		where = append(where, "(name LIKE ? OR source_config LIKE ?)")
-		pat := "%" + f.Search + "%"
-		args = append(args, pat, pat)
-	}
 	if f.Tag != "" {
 		where = append(where, `EXISTS (SELECT 1 FROM json_each(CASE WHEN tags IS NULL THEN '[]' ELSE tags END) WHERE json_each.value = ?)`)
 		args = append(args, f.Tag)
 	}
 	whereSQL := strings.Join(where, " AND ")
+
+	// 搜索不走 SQL LIKE：source_config 落库为密文（生产启用 secret_key），对密文
+	// LIKE 永远搜不到。改为取回候选行后按名称与解密后的 config 内存过滤。
+	if f.Search != "" {
+		return s.listMonitorsSearch(ctx, whereSQL, args, f)
+	}
 
 	var total int
 	if err := s.db.queryRow(ctx, `SELECT COUNT(*) FROM monitors WHERE `+whereSQL, args...).Scan(&total); err != nil {
@@ -561,29 +566,142 @@ func (s *sqliteStore) ListMonitors(ctx context.Context, f MonitorFilter) ([]*Mon
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
-	// 批量补齐渠道绑定
-	if len(out) > 0 {
-		ids := make([]string, 0, len(out))
-		for _, m := range out {
-			ids = append(ids, fmt.Sprint(m.ID))
+	s.fillMonitorChannels(ctx, out)
+	return out, total, nil
+}
+
+// listMonitorsSearch 搜索路径：内存过滤（名称 + 解密后的 source_config，不区分
+// 大小写、无通配符语义）+ 内存排序分页。监控量为个人部署规模，全量取回可接受；
+// 过滤在分页之前完成，避免「先分页后过滤」的数量错位。
+func (s *sqliteStore) listMonitorsSearch(ctx context.Context, whereSQL string, args []any, f MonitorFilter) ([]*Monitor, int, error) {
+	rows, err := s.db.query(ctx, `SELECT `+monitorCols+` FROM monitors WHERE `+whereSQL, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var all []*Monitor
+	for rows.Next() {
+		m, err := s.monitorFromRow(rows.Scan)
+		if err != nil {
+			return nil, 0, err
 		}
-		rows2, err := s.db.query(ctx,
-			`SELECT monitor_id, channel_id FROM monitor_channels WHERE monitor_id IN (`+strings.Join(ids, ",")+`)`)
-		if err == nil {
-			defer rows2.Close()
-			byID := map[int64][]int64{}
-			for rows2.Next() {
-				var mid, cid int64
-				if rows2.Scan(&mid, &cid) == nil {
-					byID[mid] = append(byID[mid], cid)
-				}
-			}
-			for _, m := range out {
-				m.ChannelIDs = byID[m.ID]
-			}
+		all = append(all, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	q := strings.ToLower(f.Search)
+	filtered := make([]*Monitor, 0, len(all))
+	for _, m := range all {
+		if strings.Contains(strings.ToLower(m.Name), q) ||
+			strings.Contains(strings.ToLower(m.SourceConfig), q) {
+			filtered = append(filtered, m)
 		}
 	}
+	total := len(filtered)
+	sortMonitorsInMemory(filtered, f.SortBy, f.SortOrder)
+
+	perPage := f.PerPage
+	if perPage <= 0 {
+		perPage = 25
+	} else if perPage > 100 {
+		perPage = 100
+	}
+	page := f.Page
+	if page <= 0 {
+		page = 1
+	}
+	offset := (page - 1) * perPage
+	var out []*Monitor
+	switch {
+	case offset >= len(filtered):
+	case offset+perPage >= len(filtered):
+		out = filtered[offset:]
+	default:
+		out = filtered[offset : offset+perPage]
+	}
+	s.fillMonitorChannels(ctx, out)
 	return out, total, nil
+}
+
+// sortMonitorsInMemory 与 SQL 排序语义一致（白名单键，缺省 id DESC）。
+func sortMonitorsInMemory(ms []*Monitor, sortBy, sortOrder string) {
+	asc := strings.EqualFold(sortOrder, "asc")
+	less := func(i, j int) bool { return ms[i].ID > ms[j].ID } // 缺省 id DESC
+	switch sortBy {
+	case "name":
+		less = func(i, j int) bool {
+			return ms[i].Name != ms[j].Name && (ms[i].Name < ms[j].Name) == asc
+		}
+	case "source_type":
+		less = func(i, j int) bool {
+			return ms[i].SourceType != ms[j].SourceType && (ms[i].SourceType < ms[j].SourceType) == asc
+		}
+	case "state":
+		less = func(i, j int) bool {
+			return ms[i].State != ms[j].State && (ms[i].State < ms[j].State) == asc
+		}
+	case "last_change_at":
+		less = monitorTimeLess(ms, asc, func(m *Monitor) *time.Time { return m.LastChangeAt })
+	case "last_checked_at":
+		less = monitorTimeLess(ms, asc, func(m *Monitor) *time.Time { return m.LastCheckedAt })
+	case "created_at":
+		less = func(i, j int) bool {
+			return !ms[i].CreatedAt.Equal(ms[j].CreatedAt) && ms[i].CreatedAt.Before(ms[j].CreatedAt) == asc
+		}
+	}
+	sort.SliceStable(ms, less)
+}
+
+// monitorTimeLess 时间键排序；nil（从未检查/变更）排最后。
+func monitorTimeLess(ms []*Monitor, asc bool, get func(*Monitor) *time.Time) func(i, j int) bool {
+	return func(i, j int) bool {
+		a, b := get(ms[i]), get(ms[j])
+		switch {
+		case a == nil && b == nil:
+			return false
+		case a == nil:
+			return false
+		case b == nil:
+			return true
+		}
+		return !a.Equal(*b) && a.Before(*b) == asc
+	}
+}
+
+// fillMonitorChannels 批量补齐渠道绑定。
+func (s *sqliteStore) fillMonitorChannels(ctx context.Context, out []*Monitor) {
+	if len(out) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(out))
+	for _, m := range out {
+		ids = append(ids, fmt.Sprint(m.ID))
+	}
+	rows2, err := s.db.query(ctx,
+		`SELECT monitor_id, channel_id FROM monitor_channels WHERE monitor_id IN (`+strings.Join(ids, ",")+`)`)
+	if err != nil {
+		return
+	}
+	defer rows2.Close()
+	byID := map[int64][]int64{}
+	for rows2.Next() {
+		var mid, cid int64
+		if rows2.Scan(&mid, &cid) == nil {
+			byID[mid] = append(byID[mid], cid)
+		}
+	}
+	for _, m := range out {
+		m.ChannelIDs = byID[m.ID]
+	}
+}
+
+// CountEnabledMonitors 启用的监控数（metrics 用，避免取回全部行）。
+func (s *sqliteStore) CountEnabledMonitors(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.db.queryRow(ctx, `SELECT COUNT(*) FROM monitors WHERE enabled = 1`).Scan(&n)
+	return n, err
 }
 
 // CountMonitorStates 一次 GROUP BY 完成仪表盘计数，避免按状态重复查询。
@@ -632,25 +750,61 @@ func (s *sqliteStore) CountMonitorStates(ctx context.Context, ownerID int64) (Mo
 	return counts, nil
 }
 
+// UpdateMonitor 更新监控的配置字段。不写 state/current_version/latest_version：
+// 这些列由 Checker 增量回写，整行覆盖会丢掉并发检查刚落库的结果；
+// 显式改基线走 SetMonitorBaseline。
 func (s *sqliteStore) UpdateMonitor(ctx context.Context, m *Monitor) error {
 	tagsJSON, _ := json.Marshal(m.Tags)
 	storedConfig := s.encField(m.SourceConfig)
 	_, err := s.db.exec(ctx, `UPDATE monitors SET
 			name = ?, source_type = ?, source_config = ?, version_prefix = ?, version_suffix = ?,
 			version_include_regex = ?, version_ignore_regex = ?, from_pattern = ?, to_pattern = ?,
-			interval_sec = ?, enabled = ?, state = ?,
-			current_version = ?, latest_version = ?, notify_cooldown_sec = ?, tags = ?, note = ?,
+			interval_sec = ?, enabled = ?, notify_cooldown_sec = ?, tags = ?, note = ?,
 			reference_monitor_id = ?, updated_at = ?
 			WHERE id = ?`,
 		m.Name, m.SourceType, storedConfig, nullString(m.VersionPrefix), nullString(m.VersionSuffix),
 		nullString(m.VersionIncludeRegex), nullString(m.VersionIgnoreRegex), nullString(m.FromPattern), nullString(m.ToPattern),
-		m.IntervalSec, boolInt(m.Enabled), string(m.State),
-		nullString(m.CurrentVersion), nullString(m.LatestVersion), m.NotifyCooldownSec, string(tagsJSON), nullString(m.Note),
+		m.IntervalSec, boolInt(m.Enabled), m.NotifyCooldownSec, string(tagsJSON), nullString(m.Note),
 		m.ReferenceMonitorID, formatTime(time.Now()), m.ID)
 	if err != nil {
 		return err
 	}
 	return s.SetMonitorChannels(ctx, m.ID, m.ChannelIDs)
+}
+
+// SetMonitorEnabled 批量启停用：只动 enabled 列。
+func (s *sqliteStore) SetMonitorEnabled(ctx context.Context, id int64, enabled bool) error {
+	_, err := s.db.exec(ctx, `UPDATE monitors SET enabled = ?, updated_at = ? WHERE id = ?`,
+		boolInt(enabled), formatTime(time.Now()), id)
+	return err
+}
+
+// SetMonitorBaseline 显式改基线（手动改 current_version/state、ack 提基线）。
+// 只更新非 nil 的列。
+func (s *sqliteStore) SetMonitorBaseline(ctx context.Context, id int64, state *MonitorState, currentVersion *string) error {
+	if state == nil && currentVersion == nil {
+		return nil
+	}
+	sets := []string{"updated_at = ?"}
+	args := []any{formatTime(time.Now())}
+	if state != nil {
+		sets = append(sets, "state = ?")
+		args = append(args, string(*state))
+	}
+	if currentVersion != nil {
+		sets = append(sets, "current_version = ?")
+		args = append(args, nullString(*currentVersion))
+	}
+	args = append(args, id)
+	_, err := s.db.exec(ctx, `UPDATE monitors SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
+	return err
+}
+
+// TouchMonitorNotified 投递成功后更新静默期基准，只动 last_notified_at。
+func (s *sqliteStore) TouchMonitorNotified(ctx context.Context, id int64, at time.Time) error {
+	_, err := s.db.exec(ctx, `UPDATE monitors SET last_notified_at = ?, updated_at = ? WHERE id = ?`,
+		formatTime(at), formatTime(time.Now()), id)
+	return err
 }
 
 func (s *sqliteStore) UpdateMonitorCompare(ctx context.Context, id int64, compareState, compareRefVersion string, compareSince *time.Time, compareNotifiedRef string) error {
