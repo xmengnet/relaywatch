@@ -38,6 +38,29 @@ func newMultiUserEnvWithLimiter(t *testing.T, limiter *auth.AttemptLimiter) *mul
 	return newMultiUserEnvWithOptions(t, nil, limiter)
 }
 
+// newMultiUserEnvWithOIDC 同 newMultiUserEnv，但启用 OIDC 服务（provider 管理
+// 路由随 s.OIDC != nil 才注册）。
+func newMultiUserEnvWithOIDC(t *testing.T) *multiUserEnv {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	svc := auth.NewService(st, time.Hour)
+	s := &Server{
+		Auth:      svc,
+		Store:     st,
+		Notifiers: notifier.NewDefaultRegistry(),
+		OIDC:      auth.NewOIDCService(st, time.Hour, "https://rw.example"),
+	}
+	return &multiUserEnv{st: st, svc: svc, h: s.Handler()}
+}
+
 func newMultiUserEnvWithOptions(t *testing.T, box store.SecretBox, limiter *auth.AttemptLimiter) *multiUserEnv {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))

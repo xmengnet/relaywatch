@@ -57,6 +57,11 @@ export function listOIDCProviders() {
   return apiFetch<{ items: OIDCProviderInfo[] }>('/auth/providers')
 }
 
+// admin：全量列表（含 id 与停用项，管理页专用；登录页用匿名 listOIDCProviders）
+export function listAllOIDCProviders() {
+  return apiFetch<{ items: OIDCProviderInfo[] }>('/auth/providers/all')
+}
+
 // admin：单个 Provider 完整信息（编辑表单用，secret 不返回）
 export function getOIDCProvider(id: number) {
   return apiFetch<OIDCProviderInfo>(`/auth/providers/${id}`)

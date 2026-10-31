@@ -27,6 +27,8 @@ func (h *OIDCHandler) routesPublic(r chi.Router) {
 }
 
 func (h *OIDCHandler) routesAdmin(r chiRouterIface) {
+	// 静态段 all 优先于 {id} 匹配；管理页全量列表，勿与匿名 GET /auth/providers 混用
+	r.With(auth.RequireAdmin).Get("/auth/providers/all", h.listAll)
 	r.With(auth.RequireAdmin).Get("/auth/providers/{id}", h.getOne)
 	r.With(auth.RequireAdmin).Get("/auth/oidc/callback-url", h.callbackBase)
 	r.Post("/auth/providers", h.create)
@@ -94,6 +96,26 @@ func (h *OIDCHandler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
+// listAll GET /auth/providers/all（admin）：管理页用的全量列表，含 id/enabled，
+// 停用的也返回；secret 永不回传。登录页匿名列表 GET /auth/providers 只回 name/icon_url，
+// 两者不可混用（管理页曾误用匿名列表导致编辑/删除因缺 id 静默失效）。
+func (h *OIDCHandler) listAll(w http.ResponseWriter, r *http.Request) {
+	providers, err := h.St.ListOIDCProviders(r.Context())
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(providers))
+	for _, p := range providers {
+		out = append(out, map[string]any{
+			"id": p.ID, "name": p.Name, "issuer": p.Issuer,
+			"client_id": p.ClientID, "scopes": p.Scopes,
+			"claim_rules": p.ClaimRules, "icon_url": p.IconURL, "enabled": p.Enabled,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
 // getOne GET /auth/providers/{id}（admin）：编辑表单用的完整信息（secret 不返回）。
 func (h *OIDCHandler) getOne(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
@@ -134,6 +156,8 @@ func (p *providerPayload) validate() error {
 	if strings.ContainsAny(p.Name, "/?#") {
 		return errors.New("name 不能包含 URL 特殊字符")
 	}
+	// 与 auth.normalizeIssuer 同规则：入库前规范化，避免尾斜杠导致 go-oidc 严格比对失败
+	p.Issuer = strings.TrimRight(strings.TrimSpace(p.Issuer), "/")
 	return nil
 }
 

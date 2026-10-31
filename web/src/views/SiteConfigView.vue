@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { getSiteConfig, putSiteConfig, type MirrorRule, type HostDefault } from '@/api/site'
 import { getSettings, putSettings, listChannels } from '@/api/channels'
 import { getMailConfig, putMailConfig, sendTestMail, type MailConfig } from '@/api/mail'
-import { listOIDCProviders, getOIDCProvider, createOIDCProvider, updateOIDCProvider, deleteOIDCProvider, getOIDCCallbackBase, type OIDCProviderInfo } from '@/api/import'
+import { listAllOIDCProviders, getOIDCProvider, createOIDCProvider, updateOIDCProvider, deleteOIDCProvider, getOIDCCallbackBase, type OIDCProviderInfo } from '@/api/import'
 import SiteMirrorEditor from '@/components/SiteMirrorEditor.vue'
 
 const { t } = useI18n()
@@ -50,7 +50,7 @@ const providerError = ref('')
 const pForm = ref()
 const editingId = ref<number | null>(null)
 const emptyProvider = () => ({
-  name: '', issuer: '', client_id: '', client_secret: '', scopes: 'openid email profile', claim_rules: '', icon_url: '',
+  name: '', issuer: '', client_id: '', client_secret: '', scopes: 'openid email profile', claim_rules: '', icon_url: '', enabled: true,
 })
 const pState = ref(emptyProvider())
 const callbackBase = ref('')
@@ -89,7 +89,7 @@ function setHostDef(type: string, host: string) {
 
 onMounted(async () => {
   try {
-    const [cfg, s, p, m] = await Promise.all([getSiteConfig(), getSettings(), listOIDCProviders(), getMailConfig().catch(() => null)])
+    const [cfg, s, p, m] = await Promise.all([getSiteConfig(), getSettings(), listAllOIDCProviders(), getMailConfig().catch(() => null)])
     mirrors.value = cfg.mirrors ?? []
     hostDefs.value = cfg.host_defaults ?? []
     const chans = await listChannels()
@@ -208,6 +208,7 @@ async function editProvider(p: OIDCProviderInfo) {
       scopes: full.scopes ?? 'openid email profile',
       claim_rules: full.claim_rules ?? '',
       icon_url: full.icon_url ?? '',
+      enabled: full.enabled ?? true,
     }
     providerError.value = ''
     isSetupOpen.value = true
@@ -233,7 +234,7 @@ async function saveProvider() {
       toast(t('site.providerCreated'))
     }
     isSetupOpen.value = false
-    providers.value = (await listOIDCProviders()).items
+    providers.value = (await listAllOIDCProviders()).items
   } catch (e) {
     providerError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -244,7 +245,7 @@ async function saveProvider() {
 async function removeProvider(p: OIDCProviderInfo) {
   if (!p.id || !window.confirm(t('site.deleteProviderConfirm', { name: p.name }))) return
   await deleteOIDCProvider(p.id)
-  providers.value = (await listOIDCProviders()).items
+  providers.value = (await listAllOIDCProviders()).items
 }
 
 async function copyCallback() {
@@ -354,7 +355,10 @@ async function copyCallback() {
       </div>
       <v-list v-if="providers.length" density="compact">
         <v-list-item v-for="p in providers" :key="p.id ?? p.name">
-          <v-list-item-title class="font-weight-medium">{{ p.name }}</v-list-item-title>
+          <v-list-item-title class="font-weight-medium">
+            {{ p.name }}
+            <v-chip v-if="p.enabled === false" size="x-small" variant="tonal" class="ms-2">{{ t('site.providerDisabled') }}</v-chip>
+          </v-list-item-title>
           <v-list-item-subtitle>{{ p.issuer }}</v-list-item-subtitle>
           <template #append>
             <v-btn icon="mdi-pencil" size="small" variant="text" :aria-label="t('common.edit')" @click="editProvider(p)" />
@@ -403,8 +407,9 @@ async function copyCallback() {
             v-model="pState.claim_rules" :label="t('site.claimRules')" rows="3" placeholder='{"email_domains":["example.com"]}'
             :hint="t('site.claimRulesHint')"
             persistent-hint
-            class="mb-4"
+            class="mb-2"
           />
+          <v-switch v-model="pState.enabled" :label="t('site.providerEnabled')" color="primary" density="compact" hide-details class="mb-2" />
           <v-alert v-if="providerError" type="error" density="compact" class="mb-2">{{ providerError }}</v-alert>
           <div class="d-flex justify-end ga-2 mt-2">
             <v-btn variant="text" @click="isSetupOpen = false">{{ t('common.cancel') }}</v-btn>

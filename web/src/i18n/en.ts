@@ -439,6 +439,8 @@ export default {
     providersEmpty: 'Not configured. Added providers appear as buttons on the sign-in page.',
     editProvider: 'Edit OIDC provider',
     addProviderTitle: 'Add OIDC provider',
+    providerEnabled: 'Enabled (button shown on sign-in page)',
+    providerDisabled: 'Disabled',
     providerName: 'Name',
     providerNameHint: 'Used for the sign-in button and URL, e.g. github, casdoor',
     callback: 'Callback URL (set as the Redirect URI in your IdP):',

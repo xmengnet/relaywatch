@@ -439,6 +439,8 @@ export default {
     providersEmpty: '未配置。添加后登录页会显示对应按钮。',
     editProvider: '编辑 OIDC Provider',
     addProviderTitle: '添加 OIDC Provider',
+    providerEnabled: '启用（登录页显示该按钮）',
+    providerDisabled: '已停用',
     providerName: '名称',
     providerNameHint: '用于登录按钮与 URL，如 github、casdoor',
     callback: '回调地址（填到 IdP 的 Redirect URI）：',

@@ -59,7 +59,7 @@ func (s *OIDCService) Begin(ctx context.Context, providerName string) (redirectU
 	if !p.Enabled {
 		return "", fmt.Errorf("OIDC provider %q 已停用", providerName)
 	}
-	prov, err := oidc.NewProvider(ctx, p.Issuer)
+	prov, err := oidc.NewProvider(ctx, normalizeIssuer(p.Issuer))
 	if err != nil {
 		return "", fmt.Errorf("发现 IdP 配置失败: %w", err)
 	}
@@ -110,7 +110,7 @@ func (s *OIDCService) Complete(ctx context.Context, providerName, state, code st
 	if err != nil {
 		return nil, err
 	}
-	prov, err := oidc.NewProvider(ctx, p.Issuer)
+	prov, err := oidc.NewProvider(ctx, normalizeIssuer(p.Issuer))
 	if err != nil {
 		return nil, fmt.Errorf("发现 IdP 配置失败: %w", err)
 	}
@@ -181,6 +181,12 @@ func (s *OIDCService) defaultOIDCRole(ctx context.Context) string {
 		return v
 	}
 	return "viewer"
+}
+
+// normalizeIssuer 去掉 issuer 的首尾空白与尾部斜杠：go-oidc 拿它与 IdP 发现文档的
+// issuer 字段做严格字符串比较，录入时多打的斜杠会导致 "did not match" 校验失败。
+func normalizeIssuer(issuer string) string {
+	return strings.TrimRight(strings.TrimSpace(issuer), "/")
 }
 
 // checkClaimRules 校验 email_domains / groups 白名单。规则为空 = 不限制。
