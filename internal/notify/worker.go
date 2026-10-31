@@ -383,13 +383,6 @@ func (w *Worker) emit(status store.DeliveryStatus) {
 	}
 }
 
-func nowOr(t *time.Time) time.Time {
-	if t != nil {
-		return *t
-	}
-	return time.Now()
-}
-
 func asPermanent(err error, target **notifier.PermanentError) bool {
 	_, ok := err.(*notifier.PermanentError)
 	return ok
