@@ -21,6 +21,31 @@
 
 RelayWatch 把版本检测的精确性和 Web 操作的体验结合起来：网页上配监控，后端按语义比较版本，新版本、落后、追平都有明确事件，通知直接推到你的 IM。
 
+## 界面预览
+
+<table width="100%">
+  <tr>
+    <td width="50%" align="center">
+      <b>监控列表与状态全览</b><br>
+      <img src="docs/images/screenshot-monitors.png" alt="监控列表" />
+    </td>
+    <td width="50%" align="center">
+      <b>监控详情、双轨对比与版本历史外链</b><br>
+      <img src="docs/images/screenshot-detail.png" alt="监控详情" />
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <b>多渠道通知矩阵（13 种渠道与模板）</b><br>
+      <img src="docs/images/screenshot-channels.png" alt="通知渠道" />
+    </td>
+    <td width="50%" align="center">
+      <b>兼容 nvchecker keyfile 批量导入预览</b><br>
+      <img src="docs/images/screenshot-import.png" alt="批量导入" />
+    </td>
+  </tr>
+</table>
+
 ## 核心能力
 
 | 能力 | 说明 |
