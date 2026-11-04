@@ -215,6 +215,7 @@ export default {
       note: '备注',
       versionHistory: '版本历史',
       change: '变更',
+      openReleaseUrl: '查看上游发布',
       detectedAt: '发现时间',
       acknowledged: '已确认',
       pendingAck: '待确认',

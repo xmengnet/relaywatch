@@ -160,6 +160,11 @@ func main() {
 		TestSender:    testSender,
 		ResendOne:     resendOne,
 		LoginLimiter:  loginLimiter,
+		MetricsCfg: httpapi.MetricsConfig{
+			Enabled:  cfg.Metrics.Enabled,
+			Username: cfg.Metrics.Username,
+			Password: cfg.Metrics.Password,
+		},
 	}
 	if srv.WebDist == nil {
 		slog.Info("dev 构建：静态资源未嵌入，前端请访问 Vite dev server (:5173)")

@@ -3,6 +3,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -39,6 +40,15 @@ type Server struct {
 	SecureCookies bool
 	// LoginLimiter 登录失败与注册验证码发送的进程内限流（可为 nil，测试用）。
 	LoginLimiter *auth.AttemptLimiter
+	// MetricsCfg Prometheus 监控抓取端点配置。
+	MetricsCfg MetricsConfig
+}
+
+// MetricsConfig 监控端点配置。
+type MetricsConfig struct {
+	Enabled  bool
+	Username string
+	Password string
 }
 
 // Handler 构建完整路由。
@@ -61,8 +71,8 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	// 运营计数不对匿名开放；Prometheus 等抓取器用 API Token（Authorization 头）
-	r.Handle("/metrics", auth.RequireAuth(&MetricsHandler{St: s.Store}))
+	// Prometheus 监控指标（受 HTTP Basic Auth 保护，不采信 Web 会话）
+	r.Get("/metrics", s.metricsHandler())
 
 	// OIDC 302 跳转（不经过 /api/v1，SPA 无法消费 302）
 	if s.OIDC != nil {
@@ -224,4 +234,27 @@ func (s *Server) statsHandler(w http.ResponseWriter, r *http.Request) {
 		"unknown":    counts.Unknown,
 		"lagging":    counts.Lagging,
 	})
+}
+
+func (s *Server) metricsHandler() http.HandlerFunc {
+	h := &MetricsHandler{St: s.Store}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.MetricsCfg.Enabled {
+			http.NotFound(w, r)
+			return
+		}
+		if s.MetricsCfg.Password == "" {
+			http.Error(w, `{"message":"metrics password not configured"}`, http.StatusForbidden)
+			return
+		}
+		user, pass, ok := r.BasicAuth()
+		if !ok ||
+			subtle.ConstantTimeCompare([]byte(user), []byte(s.MetricsCfg.Username)) != 1 ||
+			subtle.ConstantTimeCompare([]byte(pass), []byte(s.MetricsCfg.Password)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="RelayWatch Metrics"`)
+			http.Error(w, `{"message":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}
 }

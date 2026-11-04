@@ -5,23 +5,17 @@ import (
 	"net/http"
 	"strings"
 
-	"relaywatch/internal/auth"
 	"relaywatch/internal/store"
 )
 
 // MetricsHandler Prometheus 文本格式指标（简化实现，不引 client 库）。
-// 挂 auth.RequireAuth（会话或 API Token）：运营计数不对匿名开放，
-// 外部抓取器用 API Token 的 Authorization 头即可。
+// 由 Server.metricsHandler 负责 HTTP Basic Auth 守卫。
 type MetricsHandler struct {
 	St store.Store
 }
 
 // ServeHTTP 输出 /metrics。
 func (h *MetricsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if auth.UserFromContext(r.Context()) == nil {
-		http.Error(w, `{"message":"未登录"}`, http.StatusUnauthorized)
-		return
-	}
 	ctx := r.Context()
 	var b strings.Builder
 

@@ -215,6 +215,7 @@ export default {
       note: 'Note',
       versionHistory: 'Version history',
       change: 'Change',
+      openReleaseUrl: 'View upstream release',
       detectedAt: 'Detected',
       acknowledged: 'Acknowledged',
       pendingAck: 'Pending',

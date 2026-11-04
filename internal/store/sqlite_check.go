@@ -75,9 +75,9 @@ func (s *sqliteStore) ListCheckHistory(ctx context.Context, monitorID int64, pag
 
 func (s *sqliteStore) AddVersionChange(ctx context.Context, c *VersionChange) error {
 	res, err := s.db.exec(ctx, `INSERT INTO version_changes
-		(monitor_id, old_version, new_version, detected_at, acknowledged_at, acknowledged_by)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		c.MonitorID, nullString(c.OldVersion), c.NewVersion, formatTime(c.DetectedAt), nullTime(c.AcknowledgedAt), c.AcknowledgedBy)
+		(monitor_id, old_version, new_version, url, detected_at, acknowledged_at, acknowledged_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		c.MonitorID, nullString(c.OldVersion), c.NewVersion, c.URL, formatTime(c.DetectedAt), nullTime(c.AcknowledgedAt), c.AcknowledgedBy)
 	if err != nil {
 		return err
 	}
@@ -85,12 +85,12 @@ func (s *sqliteStore) AddVersionChange(ctx context.Context, c *VersionChange) er
 	return err
 }
 
-const versionChangeCols = `id, monitor_id, old_version, new_version, detected_at, acknowledged_at, acknowledged_by`
+const versionChangeCols = `id, monitor_id, old_version, new_version, url, detected_at, acknowledged_at, acknowledged_by`
 
 func (s *sqliteStore) versionChangeFromRow(scan func(dest ...any) error) (*VersionChange, error) {
 	c := &VersionChange{}
-	var oldV, detected, ackAt, ackBy sql.NullString
-	err := scan(&c.ID, &c.MonitorID, &oldV, &c.NewVersion, &detected, &ackAt, &ackBy)
+	var oldV, url, detected, ackAt, ackBy sql.NullString
+	err := scan(&c.ID, &c.MonitorID, &oldV, &c.NewVersion, &url, &detected, &ackAt, &ackBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -98,6 +98,7 @@ func (s *sqliteStore) versionChangeFromRow(scan func(dest ...any) error) (*Versi
 		return nil, err
 	}
 	c.OldVersion = oldV.String
+	c.URL = url.String
 	c.DetectedAt, _ = time.Parse(time.RFC3339Nano, detected.String)
 	if ackAt.Valid && ackAt.String != "" {
 		if t, err := time.Parse(time.RFC3339Nano, ackAt.String); err == nil {
@@ -125,9 +126,9 @@ func (s *sqliteStore) OpenVersionChange(ctx context.Context, monitorID int64) (*
 
 func (s *sqliteStore) UpdateVersionChange(ctx context.Context, c *VersionChange) error {
 	_, err := s.db.exec(ctx, `UPDATE version_changes SET
-		old_version = ?, new_version = ?, acknowledged_at = ?, acknowledged_by = ?
+		old_version = ?, new_version = ?, url = ?, acknowledged_at = ?, acknowledged_by = ?
 		WHERE id = ?`,
-		nullString(c.OldVersion), c.NewVersion, nullTime(c.AcknowledgedAt), c.AcknowledgedBy, c.ID)
+		nullString(c.OldVersion), c.NewVersion, c.URL, nullTime(c.AcknowledgedAt), c.AcknowledgedBy, c.ID)
 	return err
 }
 

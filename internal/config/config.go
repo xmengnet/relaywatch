@@ -56,6 +56,12 @@ type Config struct {
 		Level  string `yaml:"level"`
 		Format string `yaml:"format"`
 	} `yaml:"logging"`
+
+	Metrics struct {
+		Enabled  bool   `yaml:"enabled"`
+		Username string `yaml:"username"`
+		Password string `yaml:"password"`
+	} `yaml:"metrics"`
 }
 
 // Default 返回带合理默认值的配置。
@@ -78,6 +84,7 @@ func Default() *Config {
 	c.Notifications.Retry.MaxDelay = 10 * time.Minute
 	c.Logging.Level = "info"
 	c.Logging.Format = "text"
+	c.Metrics.Enabled = true
 	return c
 }
 
@@ -100,6 +107,12 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("RELAYWATCH_SECRET_KEY"); v != "" {
 		c.Security.SecretKey = v
+	}
+	if v := os.Getenv("RELAYWATCH_METRICS_USERNAME"); v != "" {
+		c.Metrics.Username = v
+	}
+	if v := os.Getenv("RELAYWATCH_METRICS_PASSWORD"); v != "" {
+		c.Metrics.Password = v
 	}
 	return c, nil
 }

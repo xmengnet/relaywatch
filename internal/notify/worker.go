@@ -233,6 +233,7 @@ func (w *Worker) buildMessage(ctx context.Context, m *store.Monitor, ch *store.C
 			NewVersion: newVersion,
 			DetectedAt: open.DetectedAt,
 		},
+		URL: open.URL,
 	}
 	title, body, err := notifier.Render("", ch.Template, data, true)
 	if err != nil {

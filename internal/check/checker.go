@@ -133,12 +133,14 @@ func (c *Checker) Check(ctx context.Context, m *store.Monitor) Outcome {
 			MonitorID:  m.ID,
 			OldVersion: decision.Change.OldVersion,
 			NewVersion: decision.Change.NewVersion,
+			URL:        res.URL,
 			DetectedAt: now,
 		}
 		switch decision.Change.Kind {
 		case "bump":
 			if openChange != nil {
 				openChange.NewVersion = decision.Change.NewVersion
+				openChange.URL = res.URL
 				if err := c.Store.UpdateVersionChange(ctx, openChange); err != nil {
 					slog.Error("update version change", "monitor", m.ID, "err", err)
 				}

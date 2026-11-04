@@ -231,6 +231,7 @@ type versionChangeResponse struct {
 	MonitorID      int64   `json:"monitor_id"`
 	OldVersion     string  `json:"old_version,omitempty"`
 	NewVersion     string  `json:"new_version"`
+	URL            string  `json:"url,omitempty"`
 	DetectedAt     string  `json:"detected_at"`
 	AcknowledgedAt *string `json:"acknowledged_at,omitempty"`
 }
@@ -241,6 +242,7 @@ func toVersionChangeResponse(c *store.VersionChange) *versionChangeResponse {
 		MonitorID:  c.MonitorID,
 		OldVersion: c.OldVersion,
 		NewVersion: c.NewVersion,
+		URL:        c.URL,
 		DetectedAt: c.DetectedAt.Format(timeRFC3339),
 	}
 	if c.AcknowledgedAt != nil {

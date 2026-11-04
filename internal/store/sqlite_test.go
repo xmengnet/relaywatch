@@ -124,3 +124,89 @@ func TestStoreMonitorPatterns(t *testing.T) {
 		t.Errorf("expected reference cleared, got: %+v", clearedF)
 	}
 }
+
+func TestStoreVersionChangeURL(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	admin := &User{Username: "admin", PasswordHash: []byte("x"), Role: "admin"}
+	if err := st.CreateUser(ctx, admin); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	m := &Monitor{
+		OwnerID:      admin.ID,
+		Name:         "url-monitor",
+		SourceType:   "github_release",
+		SourceConfig: `{"repo":"test/test"}`,
+		IntervalSec:  300,
+		Enabled:      true,
+		State:        StateUnknown,
+	}
+	if err := st.CreateMonitor(ctx, m); err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+
+	// 1. AddVersionChange with URL
+	now := time.Now()
+	chg := &VersionChange{
+		MonitorID:  m.ID,
+		OldVersion: "v1.0.0",
+		NewVersion: "v1.0.1",
+		URL:        "https://github.com/test/test/releases/tag/v1.0.1",
+		DetectedAt: now,
+	}
+	if err := st.AddVersionChange(ctx, chg); err != nil {
+		t.Fatalf("AddVersionChange: %v", err)
+	}
+	if chg.ID == 0 {
+		t.Fatalf("expected chg.ID > 0")
+	}
+
+	// 2. OpenVersionChange should return URL
+	open, err := st.OpenVersionChange(ctx, m.ID)
+	if err != nil {
+		t.Fatalf("OpenVersionChange: %v", err)
+	}
+	if open.URL != "https://github.com/test/test/releases/tag/v1.0.1" {
+		t.Errorf("open.URL = %q, want https://github.com/test/test/releases/tag/v1.0.1", open.URL)
+	}
+
+	// 3. UpdateVersionChange should persist updated URL (e.g. bump)
+	open.NewVersion = "v1.0.2"
+	open.URL = "https://github.com/test/test/releases/tag/v1.0.2"
+	if err := st.UpdateVersionChange(ctx, open); err != nil {
+		t.Fatalf("UpdateVersionChange: %v", err)
+	}
+
+	open2, err := st.OpenVersionChange(ctx, m.ID)
+	if err != nil {
+		t.Fatalf("OpenVersionChange after update: %v", err)
+	}
+	if open2.NewVersion != "v1.0.2" || open2.URL != "https://github.com/test/test/releases/tag/v1.0.2" {
+		t.Errorf("updated open mismatch: %+v", open2)
+	}
+
+	// 4. ListVersionChanges should return URL
+	changes, total, err := st.ListVersionChanges(ctx, m.ID, 1, 10)
+	if err != nil {
+		t.Fatalf("ListVersionChanges: %v", err)
+	}
+	if total != 1 || len(changes) != 1 {
+		t.Fatalf("expected 1 change, got total=%d, len=%d", total, len(changes))
+	}
+	if changes[0].URL != "https://github.com/test/test/releases/tag/v1.0.2" {
+		t.Errorf("changes[0].URL = %q", changes[0].URL)
+	}
+}

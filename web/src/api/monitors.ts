@@ -75,6 +75,7 @@ export interface VersionChangeItem {
   monitor_id: number
   old_version?: string
   new_version: string
+  url?: string
   detected_at: string
   acknowledged_at?: string
 }

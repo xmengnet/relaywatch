@@ -123,6 +123,11 @@ async function doDelete() {
     snackbar.value = true
   }
 }
+
+function isSafeUrl(url?: string): boolean {
+  if (!url) return false
+  return /^https?:\/\//i.test(url.trim())
+}
 </script>
 
 <template>
@@ -166,7 +171,26 @@ async function doDelete() {
             </thead>
             <tbody>
               <tr v-for="c in changes" :key="c.id">
-                <td><VersionDiff :old-version="c.old_version" :new-version="c.new_version" /></td>
+                <td>
+                  <div class="d-inline-flex align-center ga-1">
+                    <VersionDiff :old-version="c.old_version" :new-version="c.new_version" />
+                    <v-btn
+                      v-if="isSafeUrl(c.url)"
+                      size="x-small"
+                      variant="text"
+                      color="primary"
+                      density="compact"
+                      class="ms-1"
+                      :href="c.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      :aria-label="t('monitors.detail.openReleaseUrl')"
+                    >
+                      <v-icon size="small">mdi-open-in-new</v-icon>
+                      <v-tooltip activator="parent" location="top">{{ t('monitors.detail.openReleaseUrl') }}</v-tooltip>
+                    </v-btn>
+                  </div>
+                </td>
                 <td><RelativeTime :time="c.detected_at" /></td>
                 <td>
                   <v-chip v-if="c.acknowledged_at" size="small" variant="tonal">{{ t('monitors.detail.acknowledged') }}</v-chip>

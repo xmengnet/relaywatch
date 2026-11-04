@@ -42,3 +42,10 @@ notifications:
 logging:
   level: "info"
   format: "text"
+
+metrics:
+  # Prometheus 监控抓取端点（/metrics）
+  enabled: true
+  username: "prometheus"
+  password: "" # 必须设置密码；留空时 /metrics 将拒绝访问（403），防止未授权泄露
+

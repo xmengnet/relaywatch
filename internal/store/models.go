@@ -200,6 +200,7 @@ type VersionChange struct {
 	MonitorID      int64
 	OldVersion     string
 	NewVersion     string
+	URL            string // 上游发布/详情页面链接
 	DetectedAt     time.Time
 	AcknowledgedAt *time.Time
 	AcknowledgedBy *int64
