@@ -19,7 +19,7 @@ const snackbarText = ref('')
 
 // ---------- Tab 导航与 ?tab= 深链 ----------
 
-const tabKeys = ['quickstart', 'sources', 'channels', 'compare', 'filters', 'nvchecker'] as const
+const tabKeys = ['quickstart', 'sources', 'channels', 'compare', 'filters', 'nvchecker', 'api'] as const
 type TabKey = (typeof tabKeys)[number]
 
 const tabs = computed(() => [
@@ -29,6 +29,7 @@ const tabs = computed(() => [
   { key: 'compare', title: t('help.tabs.compare'), icon: 'mdi-scale-balance' },
   { key: 'filters', title: t('help.tabs.filters'), icon: 'mdi-filter-variant' },
   { key: 'nvchecker', title: t('help.tabs.nvchecker'), icon: 'mdi-import' },
+  { key: 'api', title: t('help.tabs.api'), icon: 'mdi-code-json' },
 ] as const)
 
 function isTabKey(v: unknown): v is TabKey {
@@ -235,6 +236,38 @@ const nvcheckerMappings = computed(() => [
 
 const templateVariables = useTemplateVariables()
 const templatePresets = useTemplatePresets()
+
+const apiOrigin = computed(() => location.origin)
+const apiExamples = computed(() => [
+  {
+    title: t('help.api.listMonitorsDesc'),
+    method: 'GET',
+    path: '/api/v1/monitors',
+    cmd: `curl -s -H "Authorization: Bearer <your-token>" "${apiOrigin.value}/api/v1/monitors"`,
+  },
+  {
+    title: t('help.api.checkNowDesc'),
+    method: 'POST',
+    path: '/api/v1/monitors/{id}/check',
+    cmd: `curl -s -X POST -H "Authorization: Bearer <your-token>" "${apiOrigin.value}/api/v1/monitors/1/check"`,
+  },
+  {
+    title: t('help.api.ackDesc'),
+    method: 'POST',
+    path: '/api/v1/monitors/{id}/ack',
+    cmd: `curl -s -X POST -H "Authorization: Bearer <your-token>" "${apiOrigin.value}/api/v1/monitors/1/ack"`,
+  },
+  {
+    title: t('help.api.getChangesDesc'),
+    method: 'GET',
+    path: '/api/v1/monitors/{id}/changes',
+    cmd: `curl -s -H "Authorization: Bearer <your-token>" "${apiOrigin.value}/api/v1/monitors/1/changes"`,
+  },
+])
+
+const crontabExample = computed(
+  () => `0 */2 * * * curl -s -X POST -H "Authorization: Bearer <your-token>" "${apiOrigin.value}/api/v1/monitors/1/check" > /dev/null`
+)
 </script>
 
 <template>
@@ -660,6 +693,75 @@ const templatePresets = useTemplatePresets()
             <li class="mb-2">{{ t('help.nvchecker.behavior2') }}</li>
             <li>{{ t('help.nvchecker.behavior3') }}</li>
           </ul>
+        </v-card>
+      </v-window-item>
+
+      <!-- ================= API 与自动化 ================= -->
+      <v-window-item value="api">
+        <v-card class="pa-4 mb-4">
+          <div class="text-subtitle-1 font-weight-bold mb-2">{{ t('help.api.title') }}</div>
+          <p class="text-body-2 mb-0">{{ t('help.api.desc') }}</p>
+        </v-card>
+
+        <v-card class="pa-4 mb-4">
+          <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('help.api.authTitle') }}</div>
+          <p class="text-body-2 mb-3">{{ t('help.api.authDesc') }}</p>
+          <div class="pa-3 rounded border font-mono text-body-2 mb-3 d-flex align-center justify-space-between" style="background-color: rgba(var(--v-theme-on-surface), 0.05);">
+            <code>Authorization: Bearer &lt;your-token&gt;</code>
+            <v-btn
+              icon="mdi-content-copy"
+              size="small"
+              variant="text"
+              color="primary"
+              @click="copyText('Authorization: Bearer <your-token>', 'Header')"
+            />
+          </div>
+          <div class="d-flex align-center justify-space-between text-body-2">
+            <span class="text-medium-emphasis">{{ t('help.api.createTokenTip') }}</span>
+            <v-btn size="small" color="primary" variant="tonal" prepend-icon="mdi-key" to="/profile">
+              {{ t('help.api.openProfileTokens') }}
+            </v-btn>
+          </div>
+        </v-card>
+
+        <v-card class="pa-4 mb-4">
+          <div class="text-subtitle-2 font-weight-bold mb-3">{{ t('help.api.endpointsTitle') }}</div>
+          <div v-for="ep in apiExamples" :key="ep.path + ep.method" class="mb-4 pb-3 border-b">
+            <div class="d-flex align-center ga-2 mb-1">
+              <v-chip size="x-small" :color="ep.method === 'POST' ? 'success' : 'primary'" label class="font-weight-bold">
+                {{ ep.method }}
+              </v-chip>
+              <code class="text-subtitle-2">{{ ep.path }}</code>
+              <span class="text-body-2 text-medium-emphasis ms-2">— {{ ep.title }}</span>
+            </div>
+            <div class="pa-3 rounded border font-mono text-caption mt-2 d-flex align-center justify-space-between" style="background-color: rgba(var(--v-theme-on-surface), 0.05); overflow-x: auto;">
+              <code>{{ ep.cmd }}</code>
+              <v-btn
+                icon="mdi-content-copy"
+                size="x-small"
+                variant="text"
+                color="primary"
+                class="ms-2"
+                @click="copyText(ep.cmd, ep.method + ' ' + ep.path)"
+              />
+            </div>
+          </div>
+        </v-card>
+
+        <v-card class="pa-4">
+          <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('help.api.automationTitle') }}</div>
+          <p class="text-body-2 mb-3">{{ t('help.api.automationDesc') }}</p>
+          <div class="pa-3 rounded border font-mono text-caption d-flex align-center justify-space-between" style="background-color: rgba(var(--v-theme-on-surface), 0.05); overflow-x: auto;">
+            <code>0 */2 * * * curl -s -X POST -H "Authorization: Bearer &lt;your-token&gt;" "{{ apiOrigin }}/api/v1/monitors/1/check" &gt; /dev/null</code>
+            <v-btn
+              icon="mdi-content-copy"
+              size="x-small"
+              variant="text"
+              color="primary"
+              class="ms-2"
+              @click="copyText(crontabExample, 'Crontab')"
+            />
+          </div>
         </v-card>
       </v-window-item>
     </v-window>

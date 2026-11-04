@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useLocale } from '@/composables/useLocale'
 import { useFormat } from '@/composables/useFormat'
 import { getProfile, updateProfile, changePassword, listSessions, revokeSession, unbindOIDC, getBindPending, confirmOIDCBind, type SessionInfo } from '@/api/users'
+import { listAPITokens, createAPIToken, revokeAPIToken, type APIToken } from '@/api/tokens'
 import { listOIDCProviders } from '@/api/import'
 import type { User } from '@/api/types'
 
@@ -29,6 +30,80 @@ const profileForm = ref()
 // 会话管理
 const sessions = ref<SessionInfo[]>([])
 const revoking = ref('')
+
+// API Tokens
+const apiTokens = ref<APIToken[]>([])
+const tokenDialog = ref(false)
+const newTokenName = ref('')
+const newTokenDays = ref(30)
+const creatingToken = ref(false)
+const createdTokenDialog = ref(false)
+const createdTokenSecret = ref('')
+const revokingTokenId = ref<number | null>(null)
+
+const expireOptions = [
+  { title: t('profile.tokenExpires30d'), value: 30 },
+  { title: t('profile.tokenExpires7d'), value: 7 },
+  { title: t('profile.tokenExpires90d'), value: 90 },
+  { title: t('profile.tokenExpiresNever'), value: 0 },
+]
+
+async function loadTokens() {
+  try {
+    apiTokens.value = (await listAPITokens()).items
+  } catch {
+    /* 忽略 */
+  }
+}
+
+function openNewTokenDialog() {
+  newTokenName.value = ''
+  newTokenDays.value = 30
+  tokenDialog.value = true
+}
+
+async function handleCreateToken() {
+  if (!newTokenName.value.trim()) return
+  creatingToken.value = true
+  try {
+    let expires_at: string | undefined
+    if (newTokenDays.value > 0) {
+      expires_at = new Date(Date.now() + newTokenDays.value * 86400000).toISOString()
+    }
+    const res = await createAPIToken({ name: newTokenName.value.trim(), expires_at })
+    createdTokenSecret.value = res.token
+    tokenDialog.value = false
+    createdTokenDialog.value = true
+    await loadTokens()
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    creatingToken.value = false
+  }
+}
+
+async function handleRevokeToken(tok: APIToken) {
+  if (!window.confirm(t('profile.tokenRevokeConfirm', { name: tok.name }))) return
+  revokingTokenId.value = tok.id
+  try {
+    await revokeAPIToken(tok.id)
+    toast(t('profile.tokenRevoked'))
+    await loadTokens()
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    revokingTokenId.value = null
+  }
+}
+
+async function copyCreatedToken() {
+  try {
+    await navigator.clipboard.writeText(createdTokenSecret.value)
+    toast(t('profile.tokenCopied'))
+  } catch {
+    toast(t('common.copyFailed'), 'error')
+  }
+}
 
 // OIDC 绑定
 const oidcProvider = ref('')
@@ -124,6 +199,7 @@ onMounted(async () => {
     /* 匿名列表不可用时仅隐藏绑定入口 */
   }
   await loadSessions()
+  await loadTokens()
 })
 
 function bindProvider(name: string) {
@@ -275,6 +351,62 @@ async function kick(sess: SessionInfo) {
       </v-form>
     </v-card>
 
+    <v-card class="pa-6 mb-4" max-width="640">
+      <div class="d-flex align-center justify-space-between mb-2">
+        <div class="text-subtitle-1 font-weight-medium">{{ t('profile.apiTokens') }}</div>
+        <v-btn
+          color="primary"
+          size="small"
+          variant="tonal"
+          prepend-icon="mdi-plus"
+          @click="openNewTokenDialog"
+        >
+          {{ t('profile.newToken') }}
+        </v-btn>
+      </div>
+      <div class="text-body-2 text-medium-emphasis mb-3 d-flex align-center justify-space-between">
+        <span>{{ t('profile.apiTokensHint') }}</span>
+        <router-link to="/help?tab=api" class="text-decoration-none text-caption text-primary text-no-wrap ms-2">
+          {{ t('profile.viewApiDocs') }}
+        </router-link>
+      </div>
+
+      <v-table v-if="apiTokens.length" density="compact">
+        <thead>
+          <tr>
+            <th>{{ t('profile.tokenName') }}</th>
+            <th>{{ t('profile.tokenExpiresAt') }}</th>
+            <th>{{ t('profile.tokenLastUsed') }}</th>
+            <th class="text-end">{{ t('common.actions') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="tok in apiTokens" :key="tok.id">
+            <td class="font-weight-medium"><code>{{ tok.name }}</code></td>
+            <td class="text-caption">
+              <span v-if="tok.expires_at">{{ formatDateTime(tok.expires_at) }}</span>
+              <span v-else class="text-medium-emphasis">{{ t('profile.tokenExpiresNever') }}</span>
+            </td>
+            <td class="text-caption text-medium-emphasis">
+              <span v-if="tok.last_used_at">{{ formatDateTime(tok.last_used_at) }}</span>
+              <span v-else>{{ t('profile.tokenLastUsedNever') }}</span>
+            </td>
+            <td class="text-end">
+              <v-btn
+                icon="mdi-delete-outline"
+                size="small"
+                variant="text"
+                color="error"
+                :loading="revokingTokenId === tok.id"
+                @click="handleRevokeToken(tok)"
+              />
+            </td>
+          </tr>
+        </tbody>
+      </v-table>
+      <div v-else class="text-medium-emphasis py-2 text-body-2">{{ t('profile.noTokens') }}</div>
+    </v-card>
+
     <v-card class="pa-6" max-width="640">
       <div class="text-subtitle-1 font-weight-medium mb-2">{{ t('profile.sessions') }}</div>
       <div class="text-body-2 text-medium-emphasis mb-4">{{ t('profile.sessionsHint') }}</div>
@@ -312,6 +444,72 @@ async function kick(sess: SessionInfo) {
           <v-btn variant="text" :disabled="confirmingBind" @click="cancelBind">{{ t('common.cancel') }}</v-btn>
           <v-btn color="primary" :loading="confirmingBind" @click="confirmBind">{{ t('profile.oidcConfirmOk') }}</v-btn>
         </div>
+      </v-card>
+    </v-dialog>
+
+    <!-- 创建 Token 对话框 -->
+    <v-dialog v-model="tokenDialog" max-width="480">
+      <v-card class="pa-4">
+        <v-card-title class="text-subtitle-1 font-weight-medium px-2">{{ t('profile.newToken') }}</v-card-title>
+        <v-card-text class="px-2 pt-2">
+          <v-text-field
+            v-model="newTokenName"
+            :label="t('profile.tokenName')"
+            :placeholder="t('profile.tokenNamePlaceholder')"
+            class="mb-3"
+            autofocus
+            @keydown.enter="handleCreateToken"
+          />
+          <v-select
+            v-model="newTokenDays"
+            :items="expireOptions"
+            item-title="title"
+            item-value="value"
+            :label="t('profile.tokenExpires')"
+          />
+        </v-card-text>
+        <v-card-actions class="justify-end px-2 pb-0">
+          <v-btn variant="text" @click="tokenDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn
+            color="primary"
+            :loading="creatingToken"
+            :disabled="!newTokenName.trim()"
+            @click="handleCreateToken"
+          >
+            {{ t('common.confirm') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- 展示新生成 Token 对话框 (一次性) -->
+    <v-dialog v-model="createdTokenDialog" max-width="520" persistent>
+      <v-card class="pa-4">
+        <v-card-title class="d-flex align-center ga-2 text-success px-2">
+          <v-icon color="success">mdi-check-circle</v-icon>
+          {{ t('profile.tokenCreatedTitle') }}
+        </v-card-title>
+        <v-card-text class="px-2 pt-2">
+          <v-alert type="warning" variant="tonal" density="compact" class="mb-4">
+            {{ t('profile.tokenCreatedWarn') }}
+          </v-alert>
+          <div class="pa-3 rounded d-flex align-center justify-space-between border text-body-2" style="word-break: break-all; background-color: rgba(var(--v-theme-on-surface), 0.05);">
+            <code>{{ createdTokenSecret }}</code>
+            <v-btn
+              icon="mdi-content-copy"
+              size="small"
+              variant="text"
+              color="primary"
+              class="ms-2"
+              @click="copyCreatedToken"
+            />
+          </div>
+        </v-card-text>
+        <v-card-actions class="justify-end px-2 pb-0">
+          <v-btn color="primary" @click="createdTokenDialog = false; createdTokenSecret = ''">
+            {{ t('common.close') }}
+          </v-btn>
+        </v-card-actions>
       </v-card>
     </v-dialog>
   </div>
