@@ -42,6 +42,13 @@ type Server struct {
 	LoginLimiter *auth.AttemptLimiter
 	// MetricsCfg Prometheus 监控抓取端点配置。
 	MetricsCfg MetricsConfig
+	// Version 构建版本号（-ldflags 注入，如 v0.2.5；dev 构建为 "dev"）。
+	Version string
+	// MCP MCP Streamable HTTP 端点（internal/mcp 构造），可为 nil（未启用）。
+	// 挂载在认证组内：Bearer API Token 认证，CSRF 天然豁免（无会话）。
+	MCP http.Handler
+	// BaseURL 实例对外地址（/SKILL.md 占位符替换用；未配置时按请求反推）。
+	BaseURL string
 }
 
 // MetricsConfig 监控端点配置。
@@ -56,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Recoverer)
+	r.Use(normalizeSkillPath)
 	r.Use(limitBody)
 	if s.TrustProxy {
 		// 安全边界由配置兜住：仅当运维显式信任反代（trust_proxy: true）才启用，
@@ -71,6 +79,8 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	// Agent Skill 分发：AI 可自行抓取安装（公开，无凭据）
+	r.Get("/SKILL.md", s.skillHandler)
 	// Prometheus 监控指标（受 HTTP Basic Auth 保护，不采信 Web 会话）
 	r.Get("/metrics", s.metricsHandler())
 
@@ -78,6 +88,16 @@ func (s *Server) Handler() http.Handler {
 	if s.OIDC != nil {
 		oidcH := &OIDCHandler{Svc: s.OIDC, St: s.Store, SecureCookies: s.SecureCookies}
 		oidcH.routesPublic(r)
+	}
+
+	// MCP 端点：AI 客户端用 Bearer API Token 连接（POST/GET/DELETE 同路径）。
+	// 与 /api/v1 同级的认证链：RequireAuth + RequireCSRF（Bearer 无会话天然豁免）。
+	if s.MCP != nil {
+		r.Group(func(r chi.Router) {
+			r.Use(auth.RequireAuth)
+			r.Use(auth.RequireCSRF)
+			r.Handle("/mcp", s.MCP)
+		})
 	}
 
 	// API v1
@@ -103,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 
 			r.Post("/auth/logout", authH.logout)
 			r.Get("/auth/csrf", authH.csrf)
+			r.Get("/version", s.versionHandler)
 
 			profH := &ProfileHandler{St: s.Store, Svc: s.Auth}
 			profH.routes(r)

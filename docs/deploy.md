@@ -78,6 +78,16 @@ location /api/v1/events {
     proxy_http_version 1.1;
     chunked_transfer_encoding off;
 }
+
+# MCP 端点：同样是 SSE 长连接，需关闭缓冲并放宽读超时
+location /mcp {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_set_header Connection '';
+    proxy_http_version 1.1;
+    proxy_read_timeout 1h;
+}
 ```
 
 `server.base_url` 需设为外部可达地址（`https://relaywatch.example.com`），OIDC 回调依赖它。
@@ -87,6 +97,25 @@ location /api/v1/events {
 ## Prometheus
 
 `/metrics` 输出文本格式指标（监控按状态计数、启用数、投递队列），无需认证——建议在反代层限制来源，或仅监听内网。
+
+## MCP（AI 客户端接入）
+
+服务内置 MCP 端点 `POST/GET /mcp`（Streamable HTTP），认证复用个人资料页签发的 API Token（`Authorization: Bearer` 头）。工具集为白名单：监控的增改/查/立即检查/确认、渠道发现与创建、告警类型发现、投递排查，不含删除、用户管理与系统配置。
+
+另有公开的 `GET /SKILL.md`（Agent Skill 格式，含接入指引与 REST 速查）：AI 客户端（Claude Code / VS Code 等）抓取该 URL 即可自行安装 skill，例如「帮我安装 https://relaywatch.example.com/SKILL.md 这个 skill」。skill 本身不含凭据——AI 首次使用时会向用户索取 Base URL 与 API Token。
+
+客户端接入示例：
+
+```bash
+# Claude Code
+claude mcp add --transport http relaywatch https://relaywatch.example.com/mcp \
+  --header "Authorization: Bearer <API Token>"
+
+# 验证
+claude mcp list
+```
+
+其他客户端（Cursor / Codex 等）：URL 填 `https://你的域名/mcp`，请求头加 `Authorization: Bearer <API Token>`。Token 在 Web 端「个人资料 → API Token」创建，吊销即时生效。
 
 ## 备份
 

@@ -19,7 +19,7 @@ const snackbarText = ref('')
 
 // ---------- Tab 导航与 ?tab= 深链 ----------
 
-const tabKeys = ['quickstart', 'sources', 'channels', 'compare', 'filters', 'nvchecker', 'api'] as const
+const tabKeys = ['quickstart', 'sources', 'channels', 'compare', 'filters', 'nvchecker', 'api', 'mcp'] as const
 type TabKey = (typeof tabKeys)[number]
 
 const tabs = computed(() => [
@@ -30,6 +30,7 @@ const tabs = computed(() => [
   { key: 'filters', title: t('help.tabs.filters'), icon: 'mdi-filter-variant' },
   { key: 'nvchecker', title: t('help.tabs.nvchecker'), icon: 'mdi-import' },
   { key: 'api', title: t('help.tabs.api'), icon: 'mdi-code-json' },
+  { key: 'mcp', title: t('help.tabs.mcp'), icon: 'mdi-robot-outline' },
 ] as const)
 
 function isTabKey(v: unknown): v is TabKey {
@@ -268,6 +269,24 @@ const apiExamples = computed(() => [
 const crontabExample = computed(
   () => `0 */2 * * * curl -s -X POST -H "Authorization: Bearer <your-token>" "${apiOrigin.value}/api/v1/monitors/1/check" > /dev/null`
 )
+const mcpConnectCmd = computed(
+  () => `claude mcp add --transport http relaywatch ${apiOrigin.value}/mcp --header "Authorization: Bearer <your-token>"`
+)
+
+const mcpTools = computed(() => [
+  { name: 'list_source_types', desc: t('help.mcp.toolListSourceTypes') },
+  { name: 'list_notifier_types', desc: t('help.mcp.toolListNotifierTypes') },
+  { name: 'list_monitors', desc: t('help.mcp.toolListMonitors') },
+  { name: 'get_monitor', desc: t('help.mcp.toolGetMonitor') },
+  { name: 'create_monitor', desc: t('help.mcp.toolCreateMonitor') },
+  { name: 'update_monitor', desc: t('help.mcp.toolUpdateMonitor') },
+  { name: 'trigger_check', desc: t('help.mcp.toolTriggerCheck') },
+  { name: 'ack_monitor', desc: t('help.mcp.toolAckMonitor') },
+  { name: 'list_channels', desc: t('help.mcp.toolListChannels') },
+  { name: 'create_channel', desc: t('help.mcp.toolCreateChannel') },
+  { name: 'get_monitor_history', desc: t('help.mcp.toolGetHistory') },
+  { name: 'get_monitor_changes', desc: t('help.mcp.toolGetChanges') },
+])
 </script>
 
 <template>
@@ -761,6 +780,59 @@ const crontabExample = computed(
               class="ms-2"
               @click="copyText(crontabExample, 'Crontab')"
             />
+          </div>
+        </v-card>
+      </v-window-item>
+
+      <!-- ================= MCP ================= -->
+      <v-window-item value="mcp">
+        <v-card class="pa-4 mb-4">
+          <div class="text-subtitle-1 font-weight-bold mb-2">{{ t('help.mcp.title') }}</div>
+          <p class="text-body-2 mb-0">{{ t('help.mcp.desc') }}</p>
+        </v-card>
+
+        <v-card class="pa-4 mb-4">
+          <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('help.mcp.step1Title') }}</div>
+          <p class="text-body-2 mb-3">{{ t('help.mcp.step1Desc') }}</p>
+          <v-btn size="small" color="primary" variant="tonal" prepend-icon="mdi-key" to="/profile">
+            {{ t('help.mcp.openProfileTokens') }}
+          </v-btn>
+        </v-card>
+
+        <v-card class="pa-4 mb-4">
+          <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('help.mcp.step2Title') }}</div>
+          <p class="text-body-2 mb-3">{{ t('help.mcp.step2Desc') }}</p>
+          <div class="pa-3 rounded border font-mono text-caption d-flex align-center justify-space-between mb-2" style="background-color: rgba(var(--v-theme-on-surface), 0.05); overflow-x: auto;">
+            <code>{{ mcpConnectCmd }}</code>
+            <v-btn icon="mdi-content-copy" size="x-small" variant="text" color="primary" class="ms-2" @click="copyText(mcpConnectCmd, 'claude mcp add')" />
+          </div>
+          <p class="text-body-2 text-medium-emphasis mb-0">{{ t('help.mcp.otherClients') }}</p>
+        </v-card>
+
+        <v-card class="pa-4 mb-4">
+          <div class="text-subtitle-2 font-weight-bold mb-3">{{ t('help.mcp.toolsTitle') }}</div>
+          <v-table density="compact">
+            <thead>
+              <tr>
+                <th class="text-left">{{ t('help.mcp.toolName') }}</th>
+                <th class="text-left">{{ t('help.mcp.toolDesc') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="tool in mcpTools" :key="tool.name">
+                <td class="font-mono text-body-2">{{ tool.name }}</td>
+                <td class="text-body-2">{{ tool.desc }}</td>
+              </tr>
+            </tbody>
+          </v-table>
+        </v-card>
+
+        <v-card class="pa-4">
+          <div class="text-subtitle-2 font-weight-bold mb-2">{{ t('help.mcp.skillTitle') }}</div>
+          <p class="text-body-2 mb-3">{{ t('help.mcp.skillDesc') }}</p>
+          <div class="pa-3 rounded border font-mono text-caption d-flex align-center justify-space-between" style="background-color: rgba(var(--v-theme-on-surface), 0.05); overflow-x: auto;">
+            <code>{{ apiOrigin }}/SKILL.md</code>
+            <v-btn icon="mdi-content-copy" size="x-small" variant="text" color="primary" class="ms-2" @click="copyText(apiOrigin + '/SKILL.md', 'SKILL.md')" />
           </div>
         </v-card>
       </v-window-item>

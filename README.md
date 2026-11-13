@@ -58,6 +58,7 @@ RelayWatch 把版本检测的精确性和 Web 操作的体验结合起来：网�
 | nvchecker 无损导入 | 100% 兼容 nvchecker keyfile（TOML）批量导入，pacman/alpm 透明代换为官方 REST API，JSON 导出备份 |
 | 企业级认证与安全 | 本地账户（bcrypt）+ 多 OIDC Provider（自定义图标、Claim 限制）+ API Token，敏感字段 AES-256-GCM 加密 |
 | 多用户与权限 | admin / user / viewer 三级角色、细粒度操作权限、资源归属隔离、注册开关与邮箱验证码 |
+| MCP 与 AI 助手 | 内置 MCP 端点（`/mcp`，Streamable HTTP），AI 客户端（Claude Code / Cursor 等）可安全查询/创建监控、触发检查、确认更新，权限与审计齐全；公开 `/SKILL.md`（Agent Skill）供 AI 自行安装接入 |
 | Web 界面 | Vue 3 + Vuetify 4.3 SPA，中英双语，单二进制 `go:embed` 嵌入，零外部依赖运行 |
 
 ## 监控源一览（33）
@@ -84,6 +85,10 @@ export RELAYWATCH_SECRET_KEY="$(openssl rand -base64 32)"   # 必须设置：丢
 ```
 
 Arch Linux 用户可从 Releases 下载 `.pkg.tar.zst` 后 `sudo pacman -U` 安装（配置位于 `/etc/relaywatch/`，密钥写入 `/etc/relaywatch/env`）。
+
+Debian / Ubuntu 用户可下载对应架构的 `.deb` 直接 `sudo dpkg -i relaywatch_<版本>-1_amd64.deb` 安装（同样自动配置 systemd、conffiles 保护用户修改）。
+
+设置页底部显示当前运行版本号；AI 客户端可通过 MCP 接入（详见 [docs/deploy.md](docs/deploy.md) 的 MCP 章节，或直接让 AI 安装 `https://你的实例/SKILL.md`）。
 
 Docker、systemd、反向代理、备份与密钥轮换等完整部署说明见 [docs/deploy.md](docs/deploy.md)。
 
@@ -124,7 +129,7 @@ staticcheck / deadcode / govulncheck 通过 go.mod 的 `tool` 指令声明，`go
 GitHub Actions（`.github/workflows/`）：
 
 - **check.yml** — push / PR 时执行：Go 质量门禁（gofmt、`interface{}` 检查、`go vet`、staticcheck 基线棘轮、deadcode）、`go test -race` 带覆盖率、`govulncheck` 依赖漏洞扫描、真实 `go:embed` 路径编译验证、前端 `pnpm test` + `pnpm build`；PR 另有提交信息规范校验
-- **release.yml** — 推送 `v*` tag 时构建 Linux amd64 / arm64 二进制与 Arch Linux 包并自动创建 GitHub Release；版本号经 `-X main.release=<tag>` 注入（`relaywatch -version` 可查）
+- **release.yml** — 推送 `v*` tag 时构建 Linux amd64 / arm64 二进制、Arch Linux 包与 Debian（amd64 / arm64）包并自动创建 GitHub Release；版本号经 `-X main.release=<tag>` 注入（`relaywatch -version` 与设置页可查）
 
 ## 技术栈
 

@@ -144,14 +144,14 @@ func (p *monitorPayload) validate() error {
 }
 
 // validateReference 校验参照绑定；另校验参照归属——普通用户只能引用同 owner 的参照。
-func (h *MonitorHandler) validateReference(ctx context.Context, selfID, selfOwner int64, refID *int64) error {
+func validateReference(ctx context.Context, st store.Store, selfID, selfOwner int64, refID *int64) error {
 	if refID == nil {
 		return nil
 	}
 	if selfID > 0 && *refID == selfID {
 		return errors.New("不能将自身设为参照监控")
 	}
-	ref, err := h.St.GetMonitor(ctx, *refID)
+	ref, err := st.GetMonitor(ctx, *refID)
 	if errors.Is(err, store.ErrNotFound) || ref == nil {
 		return errors.New("参照监控不存在")
 	}
@@ -166,7 +166,7 @@ func (h *MonitorHandler) validateReference(ctx context.Context, selfID, selfOwne
 		return errors.New("参照监控不能已有上游参照（仅支持单层参照）")
 	}
 	if selfID > 0 {
-		followers, err := h.St.ListFollowerMonitors(ctx, selfID)
+		followers, err := st.ListFollowerMonitors(ctx, selfID)
 		if err == nil && len(followers) > 0 {
 			return errors.New("当前监控已被其他监控设为参照，不能再设置上游参照")
 		}
@@ -177,9 +177,9 @@ func (h *MonitorHandler) validateReference(ctx context.Context, selfID, selfOwne
 // validateChannelIDs 校验绑定的渠道均为当前用户可访问（自己的或共享的）。
 // 全链路曾无归属校验，用户可把他人私有渠道绑到自己监控（横向越权）。
 // 归属不符与不存在同样报错，防枚举。
-func (h *MonitorHandler) validateChannelIDs(ctx context.Context, u *store.User, ids []int64) error {
+func validateChannelIDs(ctx context.Context, st store.Store, u *store.User, ids []int64) error {
 	for _, id := range ids {
-		c, err := h.St.GetChannel(ctx, id)
+		c, err := st.GetChannel(ctx, id)
 		if err != nil {
 			return fmt.Errorf("绑定的渠道不存在（#%d）", id)
 		}
@@ -200,16 +200,16 @@ func (h *MonitorHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateSourceConfig(&p); err != nil {
+	if err := validateSourceConfig(h.Registry, &p); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	u := authUser(r)
-	if err := h.validateChannelIDs(r.Context(), u, p.ChannelIDs); err != nil {
+	if err := validateChannelIDs(r.Context(), h.St, u, p.ChannelIDs); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateReference(r.Context(), 0, u.ID, p.ReferenceMonitorID); err != nil {
+	if err := validateReference(r.Context(), h.St, 0, u.ID, p.ReferenceMonitorID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -268,16 +268,16 @@ func (h *MonitorHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateSourceConfig(&p); err != nil {
+	if err := validateSourceConfig(h.Registry, &p); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	u := authUser(r)
-	if err := h.validateChannelIDs(r.Context(), u, p.ChannelIDs); err != nil {
+	if err := validateChannelIDs(r.Context(), h.St, u, p.ChannelIDs); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateReference(r.Context(), id, m.OwnerID, p.ReferenceMonitorID); err != nil {
+	if err := validateReference(r.Context(), h.St, id, m.OwnerID, p.ReferenceMonitorID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -395,9 +395,9 @@ func (h *MonitorHandler) batch(w http.ResponseWriter, r *http.Request) {
 // ---------- 转换工具 ----------
 
 // validateSourceConfig 校验源类型存在、源参数合法、版本过滤正则可编译。
-func (h *MonitorHandler) validateSourceConfig(p *monitorPayload) error {
-	if h.Registry != nil {
-		src, ok := h.Registry.Get(p.SourceType)
+func validateSourceConfig(reg *source.Registry, p *monitorPayload) error {
+	if reg != nil {
+		src, ok := reg.Get(p.SourceType)
 		if !ok {
 			return errors.New("未知源类型: " + p.SourceType)
 		}

@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    # 服务用户：优先用 systemd-sysusers（Debian 12+ 内置），否则 adduser 兜底
+    if [ -f /usr/lib/sysusers.d/relaywatch.conf ] && command -v systemd-sysusers >/dev/null 2>&1; then
+        systemd-sysusers relaywatch.conf || true
+    elif ! id relaywatch >/dev/null 2>&1; then
+        adduser --system --group --home /var/lib/relaywatch --quiet relaywatch || true
+    fi
+
+    chmod 600 /etc/relaywatch/env || true
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable relaywatch.service >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0

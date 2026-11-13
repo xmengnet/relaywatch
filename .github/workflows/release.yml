@@ -100,6 +100,51 @@ jobs:
           cd ..
           rm -rf "${PKGROOT}"
 
+      - name: Package Debian (amd64 + arm64)
+        run: |
+          VERSION="${{ github.ref_name }}"
+          PKGVER="${VERSION#v}"
+          if [[ ! "$PKGVER" =~ ^[0-9A-Za-z._+]+$ ]]; then
+            echo "tag ${VERSION} 无法转换为 Debian 包版本号，请改用 v1.0.0 形式的 tag" >&2
+            exit 1
+          fi
+
+          # 与 Arch 打包同构的目录树；systemd unit / sysusers / tmpfiles / env 直接复用 packaging/arch
+          build_deb() {
+            local arch="$1" binary="$2"
+            local PKGROOT="relaywatch-deb-pkg"
+            rm -rf "${PKGROOT}"
+            install -d "${PKGROOT}"/usr/bin "${PKGROOT}"/etc/relaywatch \
+                      "${PKGROOT}"/usr/lib/systemd/system "${PKGROOT}"/usr/lib/sysusers.d \
+                      "${PKGROOT}"/usr/lib/tmpfiles.d "${PKGROOT}"/usr/share/doc/relaywatch \
+                      "${PKGROOT}"/DEBIAN
+
+            install -m 755 "${binary}" "${PKGROOT}/usr/bin/relaywatch"
+            install -m 644 config.example.yaml "${PKGROOT}/etc/relaywatch/config.yaml"
+            install -m 600 packaging/arch/env "${PKGROOT}/etc/relaywatch/env"
+            install -m 644 packaging/arch/relaywatch.service "${PKGROOT}/usr/lib/systemd/system/relaywatch.service"
+            install -m 644 packaging/arch/relaywatch.sysusers "${PKGROOT}/usr/lib/sysusers.d/relaywatch.conf"
+            install -m 644 packaging/arch/relaywatch.tmpfiles "${PKGROOT}/usr/lib/tmpfiles.d/relaywatch.conf"
+            install -m 644 README.md "${PKGROOT}/usr/share/doc/relaywatch/README.md"
+
+            # control 模板：版本号 / 架构 / Installed-Size（KiB，dpkg 惯例）
+            sed -e "s/__VERSION__/${PKGVER}/" \
+                -e "s/__ARCH__/${arch}/" \
+                -e "s/__INSTALLED_SIZE__/$(du -sk "${PKGROOT}/usr" | awk '{print $1}')/" \
+                packaging/deb/control > "${PKGROOT}/DEBIAN/control"
+            install -m 644 packaging/deb/conffiles "${PKGROOT}/DEBIAN/conffiles"
+            install -m 755 packaging/deb/postinst "${PKGROOT}/DEBIAN/postinst"
+            install -m 755 packaging/deb/prerm "${PKGROOT}/DEBIAN/prerm"
+
+            # --root-owner-group：CI 下无需 root 也能写出正确的 root 归属
+            dpkg-deb --root-owner-group --build "${PKGROOT}" \
+              "relaywatch_${PKGVER}-1_${arch}.deb"
+            rm -rf "${PKGROOT}"
+          }
+
+          build_deb amd64 relaywatch-linux-amd64
+          build_deb arm64 relaywatch-linux-arm64
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -108,6 +153,8 @@ jobs:
             relaywatch-linux-amd64
             relaywatch-linux-arm64
             relaywatch-*-1-x86_64.pkg.tar.zst
+            relaywatch_*-1_amd64.deb
+            relaywatch_*-1_arm64.deb
           if-no-files-found: error
 
   create-release:
@@ -144,6 +191,8 @@ jobs:
             | Linux | amd64 | [relaywatch-linux-amd64](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/relaywatch-linux-amd64) |
             | Linux | arm64 | [relaywatch-linux-arm64](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/relaywatch-linux-arm64) |
             | Linux (Arch) | x86_64 | [relaywatch-${{ steps.ver.outputs.version }}-1-x86_64.pkg.tar.zst](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/relaywatch-${{ steps.ver.outputs.version }}-1-x86_64.pkg.tar.zst) |
+            | Linux (Debian) | amd64 | [relaywatch_${{ steps.ver.outputs.version }}-1_amd64.deb](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/relaywatch_${{ steps.ver.outputs.version }}-1_amd64.deb) |
+            | Linux (Debian) | arm64 | [relaywatch_${{ steps.ver.outputs.version }}-1_arm64.deb](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/relaywatch_${{ steps.ver.outputs.version }}-1_arm64.deb) |
 
             ### 快速使用
 
@@ -159,6 +208,11 @@ jobs:
             sudo pacman -U relaywatch-${{ steps.ver.outputs.version }}-1-x86_64.pkg.tar.zst
             openssl rand -base64 32   # 写入 /etc/relaywatch/env 的 RELAYWATCH_SECRET_KEY
             sudo systemctl enable --now relaywatch
+
+            # Debian / Ubuntu
+            sudo dpkg -i relaywatch_${{ steps.ver.outputs.version }}-1_amd64.deb
+            openssl rand -base64 32   # 写入 /etc/relaywatch/env 的 RELAYWATCH_SECRET_KEY
+            sudo systemctl enable --now relaywatch
             ```
 
             完整部署说明（Docker / systemd / 反向代理 / 备份）见仓库 `docs/deploy.md`。
@@ -166,4 +220,6 @@ jobs:
             dist/relaywatch-linux-amd64
             dist/relaywatch-linux-arm64
             dist/relaywatch-*-1-x86_64.pkg.tar.zst
+            dist/relaywatch_*-1_amd64.deb
+            dist/relaywatch_*-1_arm64.deb
           fail_on_unmatched_files: true

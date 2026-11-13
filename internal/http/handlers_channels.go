@@ -64,7 +64,7 @@ func (h *ChannelHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateType(&p); err != nil {
+	if err := validateChannelType(h.Notifiers, &p); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -101,8 +101,8 @@ func (h *ChannelHandler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, h.view(out, authUser(r)))
 }
 
-func (h *ChannelHandler) validateType(p *channelPayload) error {
-	n, ok := h.Notifiers.Get(p.Type)
+func validateChannelType(reg *notifier.Registry, p *channelPayload) error {
+	n, ok := reg.Get(p.Type)
 	if !ok {
 		return errors.New("未知渠道类型: " + p.Type)
 	}
@@ -163,7 +163,7 @@ func (h *ChannelHandler) list(w http.ResponseWriter, r *http.Request) {
 func (h *ChannelHandler) view(c *store.Channel, u *store.User) *channelResponse {
 	resp := toChannelResponse(c)
 	if !canModifyChannel(u, c) {
-		resp.Config = h.maskedConfig(c.Type, c.Config)
+		resp.Config = maskedConfig(h.Notifiers, c.Type, c.Config)
 	}
 	return resp
 }
@@ -173,9 +173,9 @@ var channelMask = "••••••"
 
 // maskedConfig 按 notifier 元数据把 Type=secret 的字段替换为掩码；
 // 元数据缺失时退回导出用的静态键名表。
-func (h *ChannelHandler) maskedConfig(cfgType, config string) string {
+func maskedConfig(reg *notifier.Registry, cfgType, config string) string {
 	secretKeys := map[string]bool{}
-	if n, ok := h.Notifiers.Get(cfgType); ok {
+	if n, ok := reg.Get(cfgType); ok {
 		if mp, isMeta := n.(notifier.MetaProvider); isMeta {
 			for _, f := range mp.Meta().Fields {
 				if f.Type == "secret" {
@@ -251,7 +251,7 @@ func (h *ChannelHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.validateType(&p); err != nil {
+	if err := validateChannelType(h.Notifiers, &p); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

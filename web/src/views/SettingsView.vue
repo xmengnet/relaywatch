@@ -1,9 +1,20 @@
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { exportUrl } from '@/api/import'
+import { getVersion } from '@/api/version'
 import logoUrl from '@/assets/logo.svg'
 
 const { t } = useI18n()
+const version = ref('')
+
+onMounted(async () => {
+  try {
+    version.value = (await getVersion()).version
+  } catch {
+    // 版本号展示失败不影响设置页其他功能
+  }
+})
 
 function downloadExport(redact: boolean) {
   // API 需要会话 Cookie，直接用 <a> 下载
@@ -32,7 +43,9 @@ function downloadExport(redact: boolean) {
         <img :src="logoUrl" alt="RelayWatch logo" width="44" height="44" class="rounded-lg me-3" />
         <div>
           <div class="text-subtitle-1 font-weight-medium">RelayWatch</div>
-          <div class="text-caption text-medium-emphasis">{{ t('settings.aboutTagline') }}</div>
+          <div class="text-caption text-medium-emphasis">
+            <template v-if="version">{{ t('settings.version') }}: {{ version }} · </template>{{ t('settings.aboutTagline') }}
+          </div>
         </div>
       </div>
       <div class="text-body-2 text-medium-emphasis">

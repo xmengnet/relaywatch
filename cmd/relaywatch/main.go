@@ -18,6 +18,7 @@ import (
 	"relaywatch/internal/compare"
 	"relaywatch/internal/crypto"
 	httpapi "relaywatch/internal/http"
+	"relaywatch/internal/mcp"
 	"relaywatch/internal/notifier"
 	"relaywatch/internal/notify"
 	"relaywatch/internal/scheduler"
@@ -160,6 +161,16 @@ func main() {
 		TestSender:    testSender,
 		ResendOne:     resendOne,
 		LoginLimiter:  loginLimiter,
+		Version:       release,
+		BaseURL:       cfg.Server.BaseURL,
+		MCP: mcp.NewHTTPHandler(mcp.New(mcp.Deps{
+			St:        st,
+			Sources:   registry,
+			Notifiers: notifiers,
+			Checker:   checker,
+			Evaluator: evaluator,
+			Version:   release,
+		})),
 		MetricsCfg: httpapi.MetricsConfig{
 			Enabled:  cfg.Metrics.Enabled,
 			Username: cfg.Metrics.Username,

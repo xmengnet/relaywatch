@@ -1,0 +1,11 @@
+Package: relaywatch
+Version: __VERSION__-1
+Section: net
+Priority: optional
+Architecture: __ARCH__
+Depends: ca-certificates, tzdata
+Maintainer: liyp <my@liyp.cc>
+Installed-Size: __INSTALLED_SIZE__
+Description: Self-hosted version update monitoring service
+ RelayWatch tracks software sources and upstream releases,
+ and notifies through alert channels when a new version is available.
